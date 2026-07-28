@@ -1,0 +1,55 @@
+# Internal docs, not for the public repo
+docs/internal/
+
+# Working files
+trash/
+
+# Internal imagery (public assets live in images/ and ARE tracked)
+images/internal/
+
+# Reference clones. setup.sh fetches HAIR, home-assistant/core and
+# integration_blueprint into here. Never commit them: core alone is
+# enormous and all three are somebody else's history.
+reference/
+
+# Python (verify/ and any generator tooling)
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+build/
+/dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Node, if any generated integration pulls a toolchain
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+.Trash/
+.trash/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backups
+*.bak
+*.bak2
+.backups/
+
+# Agent local settings. AGENTS.md IS tracked (it is the point of this
+# repo); the CLAUDE.md symlink pointing at it is not.
+.claude/
+CLAUDE.md
