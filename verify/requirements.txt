@@ -1,0 +1,18 @@
+# Dependencies for the self-verification gate.
+#
+# infrared-protocols supplies the upstream command classes. HAIR's decoder
+# registry prefers upstream wherever upstream ships a decoder and falls back
+# to HAIR's own decoders otherwise, so without this the gate quietly runs on
+# a smaller protocol set. NEC in particular has no local polyfill.
+#
+# Match the version Home Assistant core pins, which is in
+# reference/home-assistant-core/homeassistant/components/infrared/manifest.json.
+# The floor below is what core pinned when this file was written. Verifying
+# against a library older than the one the integration will run on is the
+# kind of gap this whole gate exists to close.
+infrared-protocols>=8.2.1
+
+# cryptography verifies ed25519 fitting signatures. Without it a signed
+# fitting cannot be checked, and the gate reports invalid rather than
+# vouching blind, which fails the run.
+cryptography>=42.0.0
