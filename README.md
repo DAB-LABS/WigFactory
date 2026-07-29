@@ -20,7 +20,7 @@ So the factory starts from evidence rather than from a spreadsheet. That is the 
 
 ## Using it
 
-You need Python 3.13, git, and a coding agent you can run in a folder.
+You need Python 3.12 or newer, git, and a coding agent you can run in a folder.
 
 ```bash
 git clone https://github.com/DAB-LABS/WigFactory.git

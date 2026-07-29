@@ -68,15 +68,12 @@ This shallow clones into `reference/`:
 | `reference/infrared-protocols` | The upstream codec library | Tells you which protocols upstream can already encode and decode, and what a module that graduates upstream has to look like |
 | `reference/integration_blueprint` | ludeeus's HACS scaffold | Repository level furniture: workflows, `hacs.json`, gitignore |
 
-Then set up the verification environment once:
-
-```bash
-python3.13 -m venv .venv
-.venv/bin/pip install -r verify/requirements.txt
-```
-
-Python 3.13 specifically. HAIR's decoders use 3.12+ syntax and are tested
-on 3.13.
+`setup.sh` also builds the verification environment: it finds the newest
+Python 3.12 or later on the machine, creates `.venv`, and installs
+`verify/requirements.txt`. **3.12 is a hard floor**, because HAIR's decoders
+use PEP 695 type parameters and the gate imports them directly. If setup
+reports no suitable interpreter, install one and run it again; it will not
+guess and it will not silently skip the gate.
 
 **`setup.sh` never runs itself.** There is no timer, no daemon and no
 auto-update. You run it, it fetches and hard resets every clone to its
@@ -408,6 +405,30 @@ models and handles.
 
 A codec that has earned that is a candidate for upstream
 `infrared-protocols`. Upstream asks that a library contribution links a core
-pull request, even a draft, so the library stays tied to real usage. That is
-a separate conversation and a separate piece of work, and it starts with
-asking rather than opening a pull request.
+pull request, even a draft, so the library stays tied to real usage.
+
+**Read `reference/infrared-protocols/AI_POLICY.md` before going anywhere near
+that, because it constrains this project specifically.** The Open Home
+Foundation policy says, in its own words:
+
+- "We do not allow autonomous agents to be used for contributing to our
+  projects." Pull requests believed to be created autonomously get closed.
+- "All contributions must be reviewed and understood by the contributor
+  before submission. You should be able to explain every change in a pull
+  request you submit."
+- "Do not use AI to generate answers to questions from maintainers."
+
+None of that blocks the factory. It does draw a hard line across it. **This
+repository's output is publishable under DAB-LABS as generated code that has
+passed the gate. It is not submittable upstream in that state.** Upstreaming
+is a separate act by a human who has read the codec line by line,
+understands why every timing constant is what it is, and can defend it in a
+review thread in their own words.
+
+So: an agent never opens an upstream pull request, never drafts replies to
+upstream maintainers, and never treats a green gate as readiness to
+contribute. The gate proves the codec matches the captured signals. It does
+not transfer anybody's understanding, and understanding is what upstream is
+asking for.
+
+Raise it with the owner and stop there.

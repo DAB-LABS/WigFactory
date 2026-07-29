@@ -81,4 +81,37 @@ if [ -d "$REF_DIR/WigShop/.git" ]; then
     echo "Wig Shop at $shop_sha ($shop_date), $shop_count wig(s) available."
 fi
 
-echo "Next: python3.13 -m venv .venv && .venv/bin/pip install -r verify/requirements.txt"
+# The verification environment.
+#
+# HAIR's decoders use 3.12+ syntax (PEP 695 type parameters), so that is the
+# floor. Anything newer is fine and newest is preferred. Naming one exact
+# interpreter here was a mistake: python3.13 is not on every machine that has
+# a perfectly good python3.14.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY=""
+for candidate in python3.15 python3.14 python3.13 python3.12 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c \
+        'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' \
+        >/dev/null 2>&1; then
+        PY="$candidate"
+        break
+    fi
+done
+
+echo
+if [ -z "$PY" ]; then
+    echo "No Python 3.12 or newer found, so the verification environment was"
+    echo "not created. HAIR's decoders need 3.12+ and the gate imports them."
+    echo "On macOS:  brew install python@3.14"
+    echo "Then re-run ./setup.sh."
+    exit 0
+fi
+
+echo "Using $($PY --version) for the verification environment."
+"$PY" -m venv "$REPO_ROOT/.venv"
+"$REPO_ROOT/.venv/bin/pip" install --quiet --upgrade pip
+"$REPO_ROOT/.venv/bin/pip" install --quiet -r "$REPO_ROOT/verify/requirements.txt"
+
+echo
+echo "Ready. Verify a wig with:"
+echo "  .venv/bin/python verify/verify_wig.py --wig <slug> --gate-only"
