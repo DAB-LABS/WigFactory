@@ -63,6 +63,8 @@ clone_or_update_core() {
 
 clone_or_update https://github.com/DAB-LABS/HAIR.git \
     HAIR main
+clone_or_update https://github.com/DAB-LABS/WigShop.git \
+    WigShop main
 clone_or_update https://github.com/home-assistant-libs/infrared-protocols.git \
     infrared-protocols main
 clone_or_update https://github.com/ludeeus/integration_blueprint.git \
@@ -71,4 +73,12 @@ clone_or_update_core
 
 echo
 echo "References ready in reference/. They are read only."
+
+if [ -d "$REF_DIR/WigShop/.git" ]; then
+    shop_sha="$(git -C "$REF_DIR/WigShop" rev-parse --short HEAD)"
+    shop_date="$(git -C "$REF_DIR/WigShop" log -1 --format=%cs)"
+    shop_count="$(find "$REF_DIR/WigShop/wigs" -name '*.wig.json' 2>/dev/null | wc -l | tr -d ' ')"
+    echo "Wig Shop at $shop_sha ($shop_date), $shop_count wig(s) available."
+fi
+
 echo "Next: python3.13 -m venv .venv && .venv/bin/pip install -r verify/requirements.txt"

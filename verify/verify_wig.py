@@ -46,6 +46,171 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_HAIR = REPO_ROOT / "reference" / "HAIR"
+DEFAULT_SHOP = REPO_ROOT / "reference" / "WigShop"
+
+# The standing promotion bar: three complete fittings from three distinct
+# GitHub accounts. Reported always; enforced only with --require-handles,
+# because the candle POC carries a written exemption and an exemption that
+# is applied silently is not an exemption.
+PROMOTION_HANDLES = 3
+
+
+# ---------------------------------------------------------------------------
+# Contributor identity
+# ---------------------------------------------------------------------------
+
+
+def github_key(value: object) -> str | None:
+    """The canonical form of a GitHub handle, for comparison only.
+
+    People type this field by hand, so one account arrives as ``dab``,
+    ``@dab``, ``DAB`` and ``github.com/dab``. Compared raw, one person on two
+    installs reads as two distinct contributors, which is precisely what the
+    three-distinct-handles gate exists to prevent. The first two wigs that
+    ever existed already disagree with each other this way.
+
+    This never rewrites a file. A fitting's ed25519 signature covers its own
+    contents including ``github``, so normalizing on disk would invalidate the
+    signature and break the shop's immutability rule at the same time. The
+    canonical form is something to compare with, never something to store.
+
+    Kept deliberately in step with ``github_key()`` in WigShop's
+    ``tools/validate_wigs.py``. If the two drift, the shop and the factory
+    will disagree about who contributed what.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    for prefix in (
+        "https://github.com/",
+        "http://github.com/",
+        "www.github.com/",
+        "github.com/",
+    ):
+        if text.lower().startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    text = text.lstrip("@").strip().rstrip("/")
+    # A pasted repository URL leaves a path behind: github.com/DAB-LABS/HAIR
+    # must resolve to the account, not to "dab-labs/hair" that matches nobody.
+    text = text.split("/", 1)[0].strip()
+    return text.casefold() or None
+
+
+# ---------------------------------------------------------------------------
+# The Wig Shop clone
+# ---------------------------------------------------------------------------
+
+
+def _git(repo: Path, *args: str) -> str | None:
+    """Run a read-only git command in ``repo``, or None if it cannot."""
+    import subprocess
+
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def shop_provenance(shop: Path) -> dict[str, str] | None:
+    """The shop clone's commit, so a build can say what it read.
+
+    Fittings accumulate over time, which makes "three distinct accounts" a
+    claim about a moment rather than a permanent fact. Recording the commit
+    turns that into something anybody can reproduce: check out this SHA and
+    you see exactly what the factory saw. Without it, a reader who goes to
+    look and finds five fittings where the README says one has no way to tell
+    whether the wig gained fittings or the stamp was wrong.
+    """
+    if not (shop / ".git").exists():
+        return None
+    sha = _git(shop, "rev-parse", "HEAD")
+    if sha is None:
+        return None
+    return {
+        "sha": sha,
+        "short": sha[:7],
+        "date": _git(shop, "log", "-1", "--format=%cs") or "unknown",
+    }
+
+
+def resolve_shop_wig(shop: Path, slug: str) -> tuple[Path | None, list[str]]:
+    """Find ``<slug>.wig.json`` under the shop clone's brand folders.
+
+    Returns the path and, when nothing matched, the slugs that do exist so the
+    error can be useful rather than merely correct.
+    """
+    wigs_dir = shop / "wigs"
+    if not wigs_dir.is_dir():
+        return None, []
+    available = sorted(
+        p.name.removesuffix(".wig.json")
+        for p in wigs_dir.glob("*/*.wig.json")
+    )
+    stem = slug.removesuffix(".wig.json").removesuffix(".json")
+    matches = sorted(wigs_dir.glob(f"*/{stem}.wig.json"))
+    if len(matches) == 1:
+        return matches[0], available
+    return None, available
+
+
+def locate_wig(
+    given: str, shop: Path, report: Report
+) -> tuple[Path | None, dict[str, str] | None]:
+    """Resolve ``--wig`` to a file, from disk or from the shop clone.
+
+    A path that exists is used as given, and nothing is claimed about where it
+    came from. Anything else is treated as a shop slug, which is the ruled
+    input path: the factory reads the same merged file every contributor sees,
+    rather than somebody's local export.
+    """
+    direct = Path(given)
+    if direct.exists():
+        provenance = None
+        try:
+            inside_shop = direct.resolve().is_relative_to(shop)
+        except (OSError, ValueError):
+            inside_shop = False
+        if inside_shop:
+            provenance = shop_provenance(shop)
+        return direct, provenance
+
+    if not shop.exists():
+        report.fail(
+            f"'{given}' is not a file, and there is no Wig Shop clone at "
+            f"{shop} to resolve it as a slug. Run ./setup.sh first."
+        )
+        return None, None
+
+    found, available = resolve_shop_wig(shop, given)
+    if found is None:
+        listing = ", ".join(available) if available else "none yet"
+        report.fail(
+            f"'{given}' is not a file and does not name exactly one wig in the "
+            f"shop. Available: {listing}"
+        )
+        return None, None
+
+    provenance = shop_provenance(shop)
+    if provenance is not None:
+        report.ok(
+            f"resolved from the Wig Shop at {provenance['short']} "
+            f"({provenance['date']}): {found.relative_to(shop)}"
+        )
+        report.note(
+            "the shop clone is a snapshot. Fittings accumulate, so run "
+            "./setup.sh to refresh before a build that will be published."
+        )
+    return found, provenance
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +315,12 @@ class Report:
 # ---------------------------------------------------------------------------
 
 
-def run_input_gate(hair: Hair, wig_path: Path, report: Report) -> Any | None:
+def run_input_gate(
+    hair: Hair,
+    wig_path: Path,
+    report: Report,
+    require_handles: int | None = None,
+) -> Any | None:
     """Enforce the input contract. Returns the parsed wig, or None."""
     try:
         text = wig_path.read_text(encoding="utf-8")
@@ -189,7 +359,7 @@ def run_input_gate(hair: Hair, wig_path: Path, report: Report) -> Any | None:
         duplicates = sorted({a for a in aliases if aliases.count(a) > 1})
         report.fail(f"duplicate aliases in the wig: {', '.join(duplicates)}")
 
-    _check_fittings(hair, wig, report)
+    _check_fittings(hair, wig, report, require_handles)
     return wig
 
 
@@ -207,7 +377,12 @@ def _verify_signature(hair: Hair, entry: dict[str, Any]) -> str | None:
         return "invalid"
 
 
-def _check_fittings(hair: Hair, wig: Any, report: Report) -> None:
+def _check_fittings(
+    hair: Hair,
+    wig: Any,
+    report: Report,
+    require_handles: int | None = None,
+) -> None:
     """Fittings must exist, be complete, bind to these codes, and verify."""
     fittings = wig.extra.get("fittings")
     if not isinstance(fittings, list) or not fittings:
@@ -273,9 +448,6 @@ def _check_fittings(hair: Hair, wig: Any, report: Report) -> None:
         )
         return
 
-    handles = sorted({
-        str(e.get("github") or e.get("handle") or "?") for e in complete
-    })
     report.facts["fittings"] = [
         {
             "handle": e.get("handle"),
@@ -288,24 +460,82 @@ def _check_fittings(hair: Hair, wig: Any, report: Report) -> None:
         }
         for e in complete
     ]
+
+    # Distinct CONTRIBUTORS, not distinct strings, and only from fittings that
+    # name a GitHub account. A display handle is what somebody typed as a name;
+    # a GitHub handle is a claim a reviewer can go and check. The gate's whole
+    # premise is three checkable people, so the two must not share a namespace.
+    accounts: dict[str, list[str]] = {}
+    unattributed = 0
+    for entry in complete:
+        account = github_key(entry.get("github"))
+        if account is None:
+            unattributed += 1
+            continue
+        display = str(entry.get("github") or entry.get("handle") or "?")
+        accounts.setdefault(account, []).append(display)
+
+    report.facts["accounts"] = sorted(accounts)
+    report.facts["promotion_handles"] = len(accounts)
     report.ok(
-        f"{len(complete)} complete fitting(s) from {len(handles)} handle(s): "
-        f"{', '.join(handles)}"
+        f"{len(complete)} complete fitting(s) from {len(accounts)} distinct "
+        f"GitHub account(s): {', '.join(sorted(accounts)) or 'none'}"
     )
 
-    key_prints: dict[str, list[str]] = {}
+    for account, spellings in accounts.items():
+        if len(set(spellings)) > 1:
+            report.note(
+                f"{len(spellings)} fittings spell one account "
+                f"({account}) as {', '.join(sorted(set(spellings)))}. Counted "
+                f"once."
+            )
+        elif len(spellings) > 1:
+            report.note(
+                f"{len(spellings)} fittings from {account}. Counted once."
+            )
+
+    if unattributed:
+        report.note(
+            f"{unattributed} complete fitting(s) carry no GitHub handle. They "
+            f"prove the wig works and do not count toward the promotion bar, "
+            f"which counts checkable accounts."
+        )
+
+    if len(accounts) < PROMOTION_HANDLES:
+        message = (
+            f"{len(accounts)} of {PROMOTION_HANDLES} distinct GitHub accounts. "
+            f"Below the standing promotion bar."
+        )
+        if require_handles is not None:
+            report.fail(message)
+        else:
+            report.note(
+                message + " Not enforced on this run; pass --require-handles "
+                f"{PROMOTION_HANDLES} to make it a gate."
+            )
+    elif require_handles is not None and len(accounts) < require_handles:
+        report.fail(
+            f"{len(accounts)} distinct GitHub accounts, {require_handles} "
+            f"required on this run."
+        )
+
+    # A shared signing key means one install, which is a different claim from
+    # one person. Grouped by canonical account so it reports in the same terms
+    # as the count above.
+    key_prints: dict[str, set[str]] = {}
     for entry in complete:
         fingerprint = hair.fitting_signing.key_fingerprint(entry.get("key", ""))
         if fingerprint:
-            key_prints.setdefault(fingerprint, []).append(
-                str(entry.get("github") or entry.get("handle") or "?")
+            who = github_key(entry.get("github")) or str(
+                entry.get("handle") or "?"
             )
+            key_prints.setdefault(fingerprint, set()).add(who)
     for fingerprint, owners in key_prints.items():
-        if len(set(owners)) > 1:
+        if len(owners) > 1:
             report.note(
-                f"handles {', '.join(sorted(set(owners)))} share signing key "
+                f"accounts {', '.join(sorted(owners))} share signing key "
                 f"{fingerprint}, so they came from one install. Not a failure, "
-                f"but they do not count as distinct for promotion."
+                f"but treat them as one contributor for promotion."
             )
 
 
@@ -615,6 +845,15 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
             print(f"  protocol:      {report.facts.get('protocol', '?')}")
             print(f"  address:       {report.facts.get('address', '?')}")
             print(f"  HAIR version:  {report.facts.get('hair_version', '?')}")
+            if report.facts.get("shop_commit"):
+                print(
+                    f"  source:        WigShop@{report.facts['shop_commit']} "
+                    f"({report.facts.get('shop_date', '?')})"
+                )
+            print(
+                f"  accounts:      {report.facts.get('promotion_handles', 0)} "
+                f"of {PROMOTION_HANDLES} for promotion"
+            )
             for fitting in report.facts.get("fittings", []):
                 print(
                     f"  fitting:       {fitting.get('handle')} "
@@ -631,7 +870,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Verify a wig, and the integration generated from it."
     )
-    parser.add_argument("--wig", required=True, type=Path, help="path to a .wig.json")
+    parser.add_argument(
+        "--wig",
+        required=True,
+        help=(
+            "a path to a .wig.json, or a Wig Shop slug such as "
+            "sanmli-candles-th05 resolved from the shop clone"
+        ),
+    )
     parser.add_argument(
         "--integration",
         type=Path,
@@ -648,14 +894,39 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_HAIR,
         help=f"path to a HAIR checkout (default: {DEFAULT_HAIR})",
     )
+    parser.add_argument(
+        "--shop",
+        type=Path,
+        default=DEFAULT_SHOP,
+        help=f"path to a Wig Shop checkout (default: {DEFAULT_SHOP})",
+    )
+    parser.add_argument(
+        "--require-handles",
+        type=int,
+        metavar="N",
+        help=(
+            "fail unless the wig carries complete fittings from N distinct "
+            "GitHub accounts. The standing promotion bar is "
+            f"{PROMOTION_HANDLES}; leave it off only where a written "
+            "exemption applies"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON instead")
     args = parser.parse_args(argv)
 
     hair = Hair(args.hair.resolve())
     report = Report()
 
-    wig = run_input_gate(hair, args.wig, report)
-    identities = decode_wig(hair, wig, report) if wig is not None else {}
+    wig_path, provenance = locate_wig(args.wig, args.shop.resolve(), report)
+    if provenance is not None:
+        report.facts["shop_commit"] = provenance["sha"]
+        report.facts["shop_date"] = provenance["date"]
+
+    wig = None
+    identities: dict[str, Any] = {}
+    if wig_path is not None:
+        wig = run_input_gate(hair, wig_path, report, args.require_handles)
+        identities = decode_wig(hair, wig, report) if wig is not None else {}
 
     if wig is not None and not args.gate_only:
         if args.integration is None:
@@ -696,7 +967,7 @@ def main(argv: list[str] | None = None) -> int:
             "facts": report.facts,
         }, indent=2))
     else:
-        print_report(report, args.wig, args.integration)
+        print_report(report, wig_path or Path(str(args.wig)), args.integration)
 
     return 0 if report.passed else 1
 

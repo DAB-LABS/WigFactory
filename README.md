@@ -28,11 +28,13 @@ cd WigFactory
 ./setup.sh
 ```
 
-`setup.sh` shallow clones the reference repositories into `reference/`, which is gitignored. They are read only examples. Nothing in the build ever edits them.
+`setup.sh` shallow clones the reference repositories into `reference/`, which is gitignored. They are read only. Nothing in the build ever edits them.
 
-Then open your coding agent in the repo root and hand it a wig:
+That includes the [Wig Shop](https://github.com/DAB-LABS/WigShop), so the wigs are already there when setup finishes. **Nothing updates itself.** There is no timer and no daemon: you run `setup.sh`, every clone is fetched and reset to its remote, and then it all sits still until you run it again. Builds have to be reproducible, and a reference that moved halfway through is a build you cannot explain afterwards. Run it when you start, and again before any build you intend to publish.
 
-> Build an integration from `wigs/sanmli-candles-th05.wig.json`.
+Then open your coding agent in the repo root and hand it a wig by name:
+
+> Build an integration from `sanmli-candles-th05`.
 
 The agent reads `AGENTS.md` and works through it in order. Output lands in a folder named for the device.
 
@@ -54,9 +56,11 @@ Coverage is checked as a bijection: every signal in the wig has exactly one code
 
 Any mismatch fails the run before anything is published.
 
+It also counts contributors rather than strings. The GitHub handle on a fitting is free text somebody typed, so one account shows up as `dab`, `@dab`, `DAB` and `github.com/dab`. Compared raw, one person on two installs supplies two of the three fittings that promotion requires without meaning to deceive anyone. The gate compares a canonical form, counts only fittings that name a checkable account, and says plainly when two fittings collapse to one person.
+
 ```bash
 python3 verify/verify_wig.py \
-  --wig wigs/sanmli-candles-th05.wig.json \
+  --wig sanmli-candles-th05 \
   --integration sanmli-candles-th05/sanmli-candles-th05-infrared
 ```
 

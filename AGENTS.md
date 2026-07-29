@@ -13,10 +13,15 @@ anything. That gate is the reason this repository exists.
 
 These apply to everything you write here.
 
-1. **`reference/` is read only.** It holds shallow clones of other people's
-   repositories. Read them, mirror their structure, never edit them, never
-   commit them. `setup.sh` refreshes them; that is the only thing that
-   writes there.
+1. **`reference/` is read only.** It holds shallow clones of other
+   repositories, and `setup.sh` is the only thing that writes there. Read
+   them, mirror their structure, never edit them, never commit them.
+
+   The Wig Shop clone lives there too, and a wig is input rather than an
+   example, so it gets one extra rule: **copy the wig you are building from
+   into `wigs/` and work on the copy.** The clone stays pristine, `setup.sh`
+   stays free to hard reset it, and the distinction between "somebody else's
+   repository" and "my working input" stays legible.
 2. **Mirror the reference exactly.** When you build the integration, match
    `lg_infrared`'s folder layout, file names and file responsibilities. Do
    not invent a nicer structure. The point of a factory is that every
@@ -58,6 +63,7 @@ This shallow clones into `reference/`:
 | Path | What it is | Why you need it |
 |---|---|---|
 | `reference/HAIR` | The HAIR integration | Its decoders are the independent witness in step 4, and `wig_format.py` is the input parser |
+| `reference/WigShop` | The Wig Shop | Where wigs come from. The factory reads the merged file everybody else sees, not somebody's local export |
 | `reference/home-assistant-core` | Home Assistant core, `dev`, sparse | `homeassistant/components/lg_infrared` is the target output shape; `homeassistant/components/infrared` is the platform contract |
 | `reference/infrared-protocols` | The upstream codec library | Tells you which protocols upstream can already encode and decode, and what a module that graduates upstream has to look like |
 | `reference/integration_blueprint` | ludeeus's HACS scaffold | Repository level furniture: workflows, `hacs.json`, gitignore |
@@ -72,16 +78,39 @@ python3.13 -m venv .venv
 Python 3.13 specifically. HAIR's decoders use 3.12+ syntax and are tested
 on 3.13.
 
+**`setup.sh` never runs itself.** There is no timer, no daemon and no
+auto-update. You run it, it fetches and hard resets every clone to its
+remote, and the clones then sit still until you run it again. That is
+deliberate: a build has to be reproducible, and a reference that moved
+underneath you halfway through is a build you cannot explain afterwards.
+
+The practical rule is **run it at the start of a build**, and again before
+any build whose output you intend to publish. A stale Wig Shop clone is
+missing fittings that landed since, which does not make the build wrong,
+only narrower than it needed to be.
+
 ---
 
 ## 2. Read the wig and run the input gate
 
-The input is one `.wig.json` file. Run the gate before you look at anything
-else:
+The input is one `.wig.json` file. Name it either way:
 
 ```bash
-.venv/bin/python verify/verify_wig.py --wig <path-to-wig> --gate-only
+# by shop slug, resolved from reference/WigShop and stamped with its commit
+.venv/bin/python verify/verify_wig.py --wig sanmli-candles-th05 --gate-only
+
+# or by path, for a wig that is not in the shop
+.venv/bin/python verify/verify_wig.py --wig wigs/whatever.wig.json --gate-only
 ```
+
+**Prefer the slug.** It reads the merged file every contributor sees, and it
+records the shop commit, which is what makes the fitting evidence
+reproducible later. Fittings accumulate over time, so "three distinct
+accounts" is a claim about a moment; `WigShop@<sha>` is how somebody checks
+that claim a year from now. A wig named by path carries no such record and
+the gate will not invent one.
+
+Run the gate before you look at anything else.
 
 It enforces the hard requirements, and all of them are refusals, not
 warnings:
@@ -103,12 +132,30 @@ warnings:
    at all is out of scope too, because there is nothing to generate from
    raw replay.
 
-Record what the gate printed. The content hash, the fitting handles and
-dates, and the HAIR version go into the generated README in step 6, and you
-cannot reconstruct them later.
+It also **counts distinct contributors**, and this is not the same as
+counting handles. The `github` field is free text somebody typed, so one
+account arrives as `dab`, `@dab`, `DAB` and `github.com/dab`. The gate
+compares a canonical form, counts only fittings that actually name a GitHub
+account, and says out loud when two fittings collapse to one person. A
+display handle names nobody a reviewer can check, so it never counts toward
+the bar.
+
+The standing promotion bar is **three complete fittings from three distinct
+GitHub accounts**. The gate reports the count on every run and enforces it
+only when you pass `--require-handles 3`. That is on purpose: the candle POC
+carries a written exemption, and an exemption applied silently is not an
+exemption.
+
+Record what the gate printed. The content hash, the shop commit, the fitting
+handles and dates, and the HAIR version go into the generated README in step
+6, and you cannot reconstruct them later.
 
 **If a wig fails this gate, stop and report why.** Do not repair the wig.
-Corrections are the fitter's job, in HAIR, with a fresh fitting.
+Corrections are the fitter's job, in HAIR, with a fresh fitting. In
+particular, never edit a `github` value to make a count come out better: the
+signature covers it, and rewriting it forges somebody's attestation.
+
+Then copy the wig into `wigs/` per ground rule 1 and work from that copy.
 
 ---
 
@@ -307,9 +354,15 @@ the part most likely to be done carelessly. It must carry:
   form, with the owner and repository filled in.
 - **Tested or untested**, stated plainly, with the models it was confirmed
   against.
-- The source wig, its content hash, and a link to it in the Wig Shop.
+- The source wig, its content hash, **the Wig Shop commit it was read at**,
+  and a link to it in the shop. The commit is what lets a reader reproduce
+  the fitting evidence exactly as the factory saw it, rather than having to
+  trust that the count was right on the day.
 - Every fitting: handle, GitHub handle, date, HAIR version, and the signing
-  key fingerprint.
+  key fingerprint. Print handles as the fitter typed them. They are compared
+  canonically and displayed verbatim, never rewritten.
+- The distinct-account count against the promotion bar, and the exemption if
+  one applies.
 - That the codebook was machine verified against HAIR's independent
   decoders, and in which directions.
 - Installation, the entities it creates, and what to do when a code does
@@ -325,6 +378,9 @@ Gates, all of them, before anything is pushed:
 
 - Step 4 green in both directions.
 - The input gate's fitting evidence real and recorded in the README.
+- **`--require-handles 3` green, or a written exemption naming this build.**
+  The POC has one. Nothing else does by default.
+- The shop clone refreshed (`./setup.sh`) and its commit stamped.
 - Attribution done or honestly marked unknown.
 - The owner has ruled on the repository name and the visibility.
 
