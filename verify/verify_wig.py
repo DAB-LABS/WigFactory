@@ -90,11 +90,16 @@ def github_key(value: object) -> str | None:
         if text.lower().startswith(prefix):
             text = text[len(prefix) :]
             break
-    text = text.lstrip("@").strip().rstrip("/")
-    # A pasted repository URL leaves a path behind: github.com/DAB-LABS/HAIR
-    # must resolve to the account, not to "dab-labs/hair" that matches nobody.
-    text = text.split("/", 1)[0].strip()
-    return text.casefold() or None
+    text = text.lstrip("@").strip()
+    # A pasted URL carries more than the account: a repo path
+    # (github.com/name/repo) or a query (github.com/name?tab=stars). Keep the
+    # first segment only. Without this the key comes back as "name/repo",
+    # which is not merely useless, it is wrong: it makes one account look like
+    # a different contributor from the same account typed plainly, which is
+    # the exact failure this function exists to prevent.
+    for sep in ("/", "?", "#"):
+        text = text.split(sep, 1)[0]
+    return text.strip().casefold() or None
 
 
 # ---------------------------------------------------------------------------
