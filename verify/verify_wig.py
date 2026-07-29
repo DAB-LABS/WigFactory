@@ -178,8 +178,11 @@ def locate_wig(
     input path: the factory reads the same merged file every contributor sees,
     rather than somebody's local export.
     """
+    # is_file, not exists. The generated output folder is named after the slug
+    # by convention, so `--wig sanmli-candles-th05` run from the repo root
+    # matches a directory before it ever reaches the shop.
     direct = Path(given)
-    if direct.exists():
+    if direct.is_file():
         provenance = None
         try:
             inside_shop = direct.resolve().is_relative_to(shop)

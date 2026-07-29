@@ -1,0 +1,62 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This candle set is already configured with that infrared emitter.",
+      "no_infrared_entities": "No infrared emitters were found. Set up an infrared integration first."
+    },
+    "step": {
+      "user": {
+        "title": "Set up Sanmli TH-05 candles",
+        "description": "Choose the infrared emitter that can reach the candles. A receiver is optional and lets Home Assistant react when the physical remote is used.",
+        "data": {
+          "infrared_entity_id": "Infrared emitter",
+          "infrared_receiver_entity_id": "Infrared receiver"
+        },
+        "data_description": {
+          "infrared_entity_id": "The blaster that sends commands to the candles.",
+          "infrared_receiver_entity_id": "Optional. Lets automations trigger on presses of the handheld remote."
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "on": { "name": "On" },
+      "off": { "name": "Off" },
+      "brighten": { "name": "Brighten" },
+      "dim": { "name": "Dim" },
+      "candle_like": { "name": "Candle effect" },
+      "flicker": { "name": "Flicker effect" },
+      "fade_out": { "name": "Fade out effect" },
+      "solid_light": { "name": "Solid light" },
+      "timer_2h": { "name": "2 hour timer" },
+      "timer_4h": { "name": "4 hour timer" },
+      "timer_6h": { "name": "6 hour timer" },
+      "timer_8h": { "name": "8 hour timer" }
+    },
+    "event": {
+      "received_command": {
+        "name": "Remote command",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "on": "On",
+              "off": "Off",
+              "brighten": "Brighten",
+              "dim": "Dim",
+              "candle_like": "Candle effect",
+              "flicker": "Flicker effect",
+              "fade_out": "Fade out effect",
+              "solid_light": "Solid light",
+              "timer_2h": "2 hour timer",
+              "timer_4h": "4 hour timer",
+              "timer_6h": "6 hour timer",
+              "timer_8h": "8 hour timer",
+              "unknown": "Unknown"
+            }
+          }
+        }
+      }
+    }
+  }
+}
