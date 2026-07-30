@@ -40,6 +40,8 @@ A press on the handheld remote is not one transmission. RC-5 re-sends the same c
 
 Three frames fixed it. If presses still get dropped, raise it. If one is plenty for your set, lower it and save the airtime.
 
+Where the number came from: the fitter, who needed three sends to get a reliable response on the bench set. The source wig at the commit below predates the fitting field that records this, so no fitting vouches for it yet. A later fitting that records three will replace this sentence with the aggregate.
+
 ### Why there is no brightness slider
 
 The remote has Brighten Up and Dim Down. They are relative steps: no absolute levels, no feedback, and no published step count.
