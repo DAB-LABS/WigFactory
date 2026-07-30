@@ -182,9 +182,15 @@ class GitHub:
             if code != 0:
                 raise Refusal(f"repository created, but settings failed: {out}")
             return
+        # A personal account and an organization take different endpoints,
+        # and guessing wrong is a 404 at the worst possible moment. Ask.
+        status, body = self._api("GET", f"/users/{OWNER}")
+        if status != 200:
+            raise Refusal(f"could not look up {OWNER} ({status}): {body}")
+        is_org = json.loads(body).get("type") == "Organization"
         status, out = self._api(
             "POST",
-            f"/orgs/{OWNER}/repos",
+            f"/orgs/{OWNER}/repos" if is_org else "/user/repos",
             {
                 "name": repo,
                 "description": description,
