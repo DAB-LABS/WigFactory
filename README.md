@@ -61,7 +61,7 @@ It also counts contributors rather than strings. The GitHub handle on a fitting 
 ```bash
 python3 verify/verify_wig.py \
   --wig sanmli-candles-th05 \
-  --integration sanmli-candles-th05/sanmli-candles-th05-infrared
+  --integration sanmli-candles-th05/sanmli-candles-th05-ir
 ```
 
 ---
@@ -70,8 +70,8 @@ python3 verify/verify_wig.py \
 
 ```
 sanmli-candles-th05/
-  sanmli-candles-th05-infrared/     ready to push to its own repository
-    custom_components/sanmli_th05/
+  sanmli-candles-th05-ir/     ready to push to its own repository
+    custom_components/sanmli_th05_ir/
       codes.py                      the codebook, generated from the wig
       button.py  light.py  event.py
       config_flow.py  entity.py  const.py  __init__.py

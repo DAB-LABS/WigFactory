@@ -1,13 +1,13 @@
 {
-  "domain": "sanmli_th05",
+  "domain": "sanmli_th05_ir",
   "name": "Sanmli TH-05 Candles",
   "codeowners": ["@DAB-LABS"],
   "config_flow": true,
   "dependencies": ["infrared"],
-  "documentation": "https://github.com/DAB-LABS/sanmli-candles-th05-infrared",
+  "documentation": "https://github.com/DAB-LABS/sanmli-candles-th05-ir",
   "integration_type": "device",
   "iot_class": "assumed_state",
-  "issue_tracker": "https://github.com/DAB-LABS/sanmli-candles-th05-infrared/issues",
+  "issue_tracker": "https://github.com/DAB-LABS/sanmli-candles-th05-ir/issues",
   "requirements": [],
   "version": "0.1.0"
 }
