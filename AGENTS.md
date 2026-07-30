@@ -624,13 +624,32 @@ factory exists to remove.
 
 The shape:
 
-**Survey first.** Walk the Wig Shop clone and sort every wig into ready,
-blocked on fittings, out of scope, or already built. Every criterion is
-something the gate already computes, so nothing here is judgement. That
-listing is the proposal the owner picks from. Do not build anything before
-they have picked.
+**Survey first.**
 
-**Then publish, per chosen wig.** One script does all of it:
+```bash
+.venv/bin/python verify/survey_shop.py
+```
+
+It runs the input gate over every wig in the shop clone and sorts the results
+into READY, FITTINGS, DEFECTS, UNUSABLE and BUILT. Every criterion is
+something the gate already computes, so nothing here is judgement. That
+listing is the proposal the owner picks from. **Do not build anything before
+they have picked.**
+
+DEFECTS is the bucket worth reading. A wig lands there when the gate found
+something wrong with the codes rather than with the paperwork: a lattice
+hole, a truncated frame, two temperatures sharing one payload. Those are
+fixed at the source and never here.
+
+**Then publish, per chosen wig.**
+
+```bash
+publish/publish_integration.py --wig <slug> --integration <path>
+publish/publish_integration.py --wig <slug> --integration <path> --publish
+```
+
+Without `--publish` it prints what it would create and touches nothing. The
+script does all of it:
 
 1. **Re-runs the gate itself**, with `--require-handles 3` or a matching
    `--exemption`. Non-zero exit stops everything. This is load bearing: a

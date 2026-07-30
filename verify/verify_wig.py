@@ -123,6 +123,83 @@ def github_key(value: object) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Exemptions
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Exemption:
+    """One written waiver of the promotion bar, for one wig."""
+
+    slug: str
+    reason: str
+    ruled_by: str
+    date: str
+    retires: str
+
+    def summary(self) -> str:
+        who = f" by {self.ruled_by}" if self.ruled_by else ""
+        when = f" on {self.date}" if self.date else ""
+        return f"exemption for {self.slug}, ruled{who}{when}"
+
+
+def _table_field(section: str, label: str) -> str:
+    """Pull a value out of a two-column markdown table row."""
+    for line in section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip().strip("*") for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and cells[0].casefold() == label.casefold():
+            return cells[1].strip()
+    return ""
+
+
+def _bold_paragraph(section: str, label: str) -> str:
+    """Pull the paragraph introduced by a bold run-in heading."""
+    marker = f"**{label}.**"
+    index = section.find(marker)
+    if index < 0:
+        return ""
+    rest = section[index + len(marker) :]
+    paragraph = rest.split("\n\n", 1)[0]
+    return " ".join(paragraph.split())
+
+
+def read_exemptions(path: Path) -> dict[str, Exemption]:
+    """Parse ``EXEMPTIONS.md`` into one entry per wig slug.
+
+    Deliberately forgiving about layout and deliberately strict about the
+    slug. An exemption covers exactly the wig named in its heading and never
+    generalizes, because the failure this whole mechanism guards against is a
+    waiver quietly becoming a policy.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    found: dict[str, Exemption] = {}
+    sections = text.split("\n## ")
+    for section in sections[1:]:
+        heading, _, body = section.partition("\n")
+        slug = heading.strip().strip("`").strip()
+        if not slug or " " in slug:
+            continue
+        found[slug.casefold()] = Exemption(
+            slug=slug,
+            reason=_bold_paragraph(body, "Reason"),
+            ruled_by=_table_field(body, "Ruled by"),
+            date=_table_field(body, "Date"),
+            retires=_table_field(body, "Retires when"),
+        )
+    return found
+
+
+def wig_slug(wig_path: Path) -> str:
+    """The shop slug a wig file corresponds to."""
+    return wig_path.name.removesuffix(".json").removesuffix(".wig")
+
+
+# ---------------------------------------------------------------------------
 # Send times
 # ---------------------------------------------------------------------------
 
@@ -468,6 +545,7 @@ def run_input_gate(
     wig_path: Path,
     report: Report,
     require_handles: int | None = None,
+    exemption: Exemption | None = None,
 ) -> Any | None:
     """Enforce the input contract. Returns the parsed wig, or None."""
     try:
@@ -493,6 +571,7 @@ def run_input_gate(
     report.facts["brand"] = wig.brand
     report.facts["model"] = wig.model
     report.facts["kind"] = wig.kind
+    report.facts["identifiers"] = dict(wig.identifiers or {})
     report.facts["signal_count"] = len(wig.signals)
     report.facts["hair_version"] = hair.version
     report.facts["shape"] = "matrix" if matrix is not None else "signals"
@@ -505,7 +584,7 @@ def run_input_gate(
     if matrix is not None:
         check_matrix(hair, wig, matrix, report)
 
-    _check_fittings(hair, wig, report, require_handles)
+    _check_fittings(hair, wig, report, require_handles, exemption)
     return wig
 
 
@@ -528,6 +607,7 @@ def _check_fittings(
     wig: Any,
     report: Report,
     require_handles: int | None = None,
+    exemption: Exemption | None = None,
 ) -> None:
     """Fittings must exist, be complete, bind to these codes, and verify."""
     fittings = wig.extra.get("fittings")
@@ -654,23 +734,44 @@ def _check_fittings(
             f"which counts checkable accounts."
         )
 
+    shortfall = None
     if len(accounts) < PROMOTION_HANDLES:
-        message = (
+        shortfall = (
             f"{len(accounts)} of {PROMOTION_HANDLES} distinct GitHub accounts. "
             f"Below the standing promotion bar."
         )
-        if require_handles is not None:
-            report.fail(message)
-        else:
-            report.note(
-                message + " Not enforced on this run; pass --require-handles "
-                f"{PROMOTION_HANDLES} to make it a gate."
-            )
     elif require_handles is not None and len(accounts) < require_handles:
-        report.fail(
+        shortfall = (
             f"{len(accounts)} distinct GitHub accounts, {require_handles} "
             f"required on this run."
         )
+
+    if shortfall is None:
+        pass
+    elif require_handles is None:
+        report.note(
+            shortfall + " Not enforced on this run; pass --require-handles "
+            f"{PROMOTION_HANDLES} to make it a gate."
+        )
+    elif exemption is not None:
+        # The waiver is quoted into the output rather than merely honoured, so
+        # the published build's own log says out loud that it went out under
+        # one, and why. An exemption nobody can see in the artifact is the
+        # thing this mechanism exists to prevent.
+        report.facts["exemption"] = {
+            "slug": exemption.slug,
+            "ruled_by": exemption.ruled_by,
+            "date": exemption.date,
+            "retires": exemption.retires,
+        }
+        report.note(
+            f"{shortfall} WAIVED by a written {exemption.summary()}. "
+            f"Reason: {exemption.reason or 'none recorded'}"
+        )
+        if exemption.retires:
+            report.note(f"that exemption retires when: {exemption.retires}")
+    else:
+        report.fail(shortfall)
 
     # A shared signing key means one install, which is a different claim from
     # one person. Grouped by canonical account so it reports in the same terms
@@ -1548,6 +1649,17 @@ def main(argv: list[str] | None = None) -> int:
             "exemption applies"
         ),
     )
+    parser.add_argument(
+        "--exemption",
+        type=Path,
+        metavar="FILE",
+        help=(
+            "a written waiver file, normally EXEMPTIONS.md. Used with "
+            "--require-handles: an entry naming this wig turns the handle "
+            "failure into a note that quotes the reason into the build "
+            "output. No matching entry and the gate still refuses"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON instead")
     args = parser.parse_args(argv)
 
@@ -1559,10 +1671,28 @@ def main(argv: list[str] | None = None) -> int:
         report.facts["shop_commit"] = provenance["sha"]
         report.facts["shop_date"] = provenance["date"]
 
+    exemption = None
+    if args.exemption is not None and wig_path is not None:
+        entries = read_exemptions(args.exemption)
+        if not entries:
+            report.note(
+                f"no exemptions could be read from {args.exemption}. The bar "
+                f"stands."
+            )
+        exemption = entries.get(wig_slug(wig_path).casefold())
+        if exemption is None and entries:
+            report.note(
+                f"{args.exemption} carries no entry for "
+                f"'{wig_slug(wig_path)}'. One wig's waiver never covers "
+                f"another, so the bar stands."
+            )
+
     wig = None
     identities: dict[str, Any] = {}
     if wig_path is not None:
-        wig = run_input_gate(hair, wig_path, report, args.require_handles)
+        wig = run_input_gate(
+            hair, wig_path, report, args.require_handles, exemption
+        )
         identities = decode_wig(hair, wig, report) if wig is not None else {}
 
     if wig is not None and not args.gate_only:
