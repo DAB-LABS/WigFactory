@@ -143,9 +143,28 @@ only when you pass `--require-handles 3`. That is on purpose: the candle POC
 carries a written exemption, and an exemption applied silently is not an
 exemption.
 
+It also reads **send times** off the fittings. A fitting made on HAIR 0.9.0 or
+later carries `send_times_used`: how many times each signal had to be
+transmitted per press before the device answered, during the session that
+proved it. Read the number the gate prints, because step 5 has to ship it.
+
+Three rules about that field, and they are all easy to get wrong:
+
+- **Absent is not 1.** A fitting without it predates the field and claims
+  nothing. An explicit `1` is a real measurement: the fitter had the control
+  and one send was enough. Never treat the first as the second.
+- **Aggregate by maximum, never mean.** Send times is a threshold, not a
+  tendency. A fitter reporting 3 is saying fewer than three was unreliable
+  where they stood, so averaging `[1, 3, 3]` to 2 produces a number that
+  satisfies nobody who measured.
+- **Read the spread, not just the max.** The gate prints both. Three fittings
+  saying 1 and one saying 8 is not a device that needs eight frames, it is one
+  room with a weak blaster or a bad angle. That is a judgement call, so make
+  it deliberately rather than letting the max make it for you.
+
 Record what the gate printed. The content hash, the shop commit, the fitting
-handles and dates, and the HAIR version go into the generated README in step
-6, and you cannot reconstruct them later.
+handles and dates, the HAIR version and the send times go into the generated
+README in step 6, and you cannot reconstruct them later.
 
 **If a wig fails this gate, stop and report why.** Do not repair the wig.
 Corrections are the fitter's job, in HAIR, with a fresh fitting. In
@@ -255,6 +274,31 @@ separate implementation from the encoder.
 Every codebook entry traces to exactly one wig alias. A generated integration
 that quietly dropped three buttons passes every other check.
 
+**Send count against the evidence.** `DEFAULT_SEND_COUNT` in the generated
+`const.py`, read out of the file rather than imported, against the maximum
+`send_times_used` across the complete fittings. Below the proven threshold is a
+refusal. Above it is allowed and noted, since more frames cost airtime and not
+correctness. This one check is not about the codec at all: a codec can be
+perfectly right and the integration still look broken, because the frames never
+arrived.
+
+Where the HAIR checkout is 0.9.0 or newer the gate calls HAIR's own
+`fitting_send_times_max` rather than aggregating itself. HAIR's docstring calls
+that function the single aggregation point for send times, shared with ADOPT
+DEVICE and the shop index, and two implementations of one rule is how the rule
+drifts. The factory keeps a fallback reader for older checkouts, kept in step
+with HAIR's the same way `github_key` is kept in step with the shop's. If you
+touch either reader, re-run the vectors:
+
+```bash
+.venv/bin/python verify/test_send_times.py
+```
+
+It compares the factory's reader against HAIR's on every shape the field has
+been seen to carry, and refuses if the two disagree by so much as one value. A
+fallback that drifts from the thing it falls back to is worse than no fallback,
+because it fails quietly and in the direction nobody checks.
+
 **Any mismatch fails the run.** Do not adjust the gate to accommodate the
 generated code. Fix the generated code.
 
@@ -324,6 +368,38 @@ indexing so it never raises on malformed input.
 flipped after each send in which at least one emitter accepted the command.
 Not per entity, not per button.
 
+**Frames per press comes from the fittings, not from you.** Real remotes do
+not send one frame. RC-5 re-sends the same code every 114ms for as long as the
+key is held, so a physical press is three or four frames, and a battery
+powered device that duty cycles its receiver can sleep straight through a
+single frame. The symptom is a button that works on the first press sometimes
+and needs three other times, with no pattern, on a codebook that is completely
+correct. The gate cannot see it, because encoding and decoding are both fine.
+So:
+
+- `const.py` carries `DEFAULT_SEND_COUNT`, `MIN_SEND_COUNT = 1`,
+  `MAX_SEND_COUNT = 10` and a gap between frames of about 100ms.
+- `DEFAULT_SEND_COUNT` is the **maximum `send_times_used` across the complete
+  fittings**, which is the number the gate prints. Not a number you chose. The
+  gate refuses a default below the proven threshold, because shipping under it
+  reproduces a fault somebody already found and wrote down.
+- All the frames in one press share one RC-5 toggle value, and the toggle
+  advances once, after the last of them. A press is one press. Advancing per
+  frame tells the device it was pressed three times, which is exactly what
+  toggle exists to distinguish.
+- Expose it in the options flow. Send times measures a room, and the next
+  person's room is not this one.
+- **When no fitting carries the field**, the gate says so and stops short of
+  guessing. Ask the fitter how many sends the device actually needed, use that,
+  and say in the README that the number came from the fitter rather than from a
+  fitting. Do not silently ship 1: absent is not a measurement of 1, and a
+  default nobody measured is the kind of thing that reads as a broken
+  integration.
+- A wig signal carrying its own `send_count` above 1 is a **different claim**.
+  That is a property of the code, where send times is a property of the room. A
+  single setting cannot express a per code repeat; generate one for that code
+  or say plainly in the README that it is sent once.
+
 **Requirements are PyPI specifiers only.** Never a VCS URL: hassfest and
 HACS both pass it and the config flow then fails with a 500 at runtime, which
 is a miserable afternoon. Never a space around the `@` in a requirement
@@ -355,11 +431,18 @@ the part most likely to be done carelessly. It must carry:
   and a link to it in the shop. The commit is what lets a reader reproduce
   the fitting evidence exactly as the factory saw it, rather than having to
   trust that the count was right on the day.
-- Every fitting: handle, GitHub handle, date, HAIR version, and the signing
-  key fingerprint. Print handles as the fitter typed them. They are compared
-  canonically and displayed verbatim, never rewritten.
+- Every fitting: handle, GitHub handle, date, HAIR version, the signing key
+  fingerprint, and the send times it recorded. Print handles as the fitter
+  typed them. They are compared canonically and displayed verbatim, never
+  rewritten.
 - The distinct-account count against the promotion bar, and the exemption if
   one applies.
+- **Frames per press, and where the number came from.** Say the aggregate and
+  the basis: "3, the maximum across 1 reporting fitting" or "3, from the
+  fitter, no fitting records it". Then say what to do if presses still get
+  dropped, because that is the single most likely thing to need adjusting on
+  hardware other than the bench set. A reader who knows the number is evidence
+  from somebody's room will reach for the setting instead of filing a bug.
 - That the codebook was machine verified against HAIR's independent
   decoders, and in which directions.
 - Installation, the entities it creates, and what to do when a code does

@@ -19,6 +19,13 @@ directions:
   Coverage. Every wig alias has exactly one codebook entry, and every
             codebook entry traces to exactly one wig alias.
 
+There is one further check that is not about the codec at all. A fitting made
+on HAIR 0.9.0 or later records how many times each signal had to be
+transmitted before the device answered. That is a measurement of somebody's
+room, and the generated integration's shipped default must not sit below it,
+because a codec can be perfectly correct and still appear broken if the frames
+never arrive.
+
 Press state (the RC-5 toggle bit and its relatives) is excluded on both
 sides, because a toggle records which press it was and not which button.
 That exclusion is HAIR's, not ours: identities are compared on the decoded
@@ -34,6 +41,7 @@ Exit code 0 means every check that ran passed. Anything else is a refusal.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib
 import importlib.util
 import json
@@ -53,6 +61,17 @@ DEFAULT_SHOP = REPO_ROOT / "reference" / "WigShop"
 # because the candle POC carries a written exemption and an exemption that
 # is applied silently is not an exemption.
 PROMOTION_HANDLES = 3
+
+# The bounds every reader clamps send times to, matching HAIR's
+# const.MAX_SEND_COUNT. One frame is the floor because zero sends is not a
+# measurement, and ten is the ceiling because past that the airtime costs more
+# than the reliability buys.
+SEND_TIMES_MIN = 1
+SEND_TIMES_MAX = 10
+
+# The field a HAIR 0.9.0 fitting carries: how many times each signal was
+# transmitted per press while somebody proved this wig on real hardware.
+SEND_TIMES_KEY = "send_times_used"
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +119,76 @@ def github_key(value: object) -> str | None:
     for sep in ("/", "?", "#"):
         text = text.split(sep, 1)[0]
     return text.strip().casefold() or None
+
+
+# ---------------------------------------------------------------------------
+# Send times
+# ---------------------------------------------------------------------------
+
+
+def _fittings(count: int) -> str:
+    """Pluralize a fitting count. Gate output gets read by people."""
+    return f"{count} fitting" if count == 1 else f"{count} fittings"
+
+
+def read_send_times(entry: dict[str, Any]) -> int | None:
+    """Read ``send_times_used`` off one raw fitting, clamped, or None.
+
+    ABSENT IS NOT 1. A fitting without the field was made before HAIR 0.9.0,
+    or by a tool that does not write it, and claims nothing about how many
+    frames the device needed. An explicit ``1`` is a different statement: the
+    fitter had the control in front of them and one send was enough. Coercing
+    the first into the second would let a wig from 2026-07 silently vouch for a
+    default nobody measured, which is the exact false confidence the field was
+    added to remove.
+
+    ``bool`` is an ``int`` subclass, so ``True`` would otherwise read as 1.
+    That is garbage arriving in a numeric field, not a measurement, so it is
+    refused rather than believed.
+
+    Clamped on read because a signature makes a value tamper evident, not
+    sane: a fitting can be perfectly signed and still carry 1000.
+
+    Kept deliberately in step with ``_read_send_times`` in HAIR's
+    ``wig_fitting.py``. Where that module is importable the factory calls
+    HAIR's aggregate instead of this, and this becomes the fallback for a HAIR
+    checkout older than 0.9.0.
+    """
+    value = entry.get(SEND_TIMES_KEY)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return max(SEND_TIMES_MIN, min(value, SEND_TIMES_MAX))
+
+
+def read_default_send_count(component_dir: Path) -> dict[str, int]:
+    """Read the send-count constants out of a generated ``const.py``.
+
+    Parsed, not imported. ``const.py`` in a generated integration is plain
+    module level assignments, and reading it with ``ast`` means the gate can
+    check the number a user will actually get without importing anything that
+    might reach for Home Assistant.
+    """
+    found: dict[str, int] = {}
+    path = component_dir / "const.py"
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return found
+    wanted = {"DEFAULT_SEND_COUNT", "MIN_SEND_COUNT", "MAX_SEND_COUNT"}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name) or target.id not in wanted:
+                continue
+            value = node.value
+            if (
+                isinstance(value, ast.Constant)
+                and isinstance(value.value, int)
+                and not isinstance(value.value, bool)
+            ):
+                found[target.id] = value.value
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +356,21 @@ class Hair:
         self.fitting_signing = importlib.import_module(
             "custom_components.hair.fitting_signing"
         )
+        # Optional, and deliberately so. `wig_fitting` is where HAIR 0.9.0 put
+        # `fitting_send_times_max`, which its own docstring calls the single
+        # aggregation point for send times: ADOPT DEVICE, the factory and the
+        # shop index all call it so the rule cannot drift. The factory would
+        # rather use HAIR's answer than hold a second opinion. A HAIR checkout
+        # older than 0.9.0 simply does not have it, and an older module can
+        # also pull in a dependency the shim does not provide, so a failure to
+        # import is a fallback and never a refusal.
+        self.wig_fitting: Any | None
+        try:
+            self.wig_fitting = importlib.import_module(
+                "custom_components.hair.wig_fitting"
+            )
+        except BaseException:  # noqa: BLE001 - see comment above
+            self.wig_fitting = None
 
     @property
     def version(self) -> str:
@@ -288,6 +392,16 @@ class Hair:
             return None
         raw = command.get_raw_timings()
         return raw or None
+
+    def send_times_max(self, wig: Any) -> int | None:
+        """HAIR's own send-times aggregate, or None if this HAIR predates it."""
+        aggregate = getattr(self.wig_fitting, "fitting_send_times_max", None)
+        if aggregate is None:
+            return None
+        try:
+            return int(aggregate(wig))
+        except BaseException:  # noqa: BLE001 - fall back rather than refuse
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +579,7 @@ def _check_fittings(
             "key_fingerprint": hair.fitting_signing.key_fingerprint(
                 e.get("key", "")
             ),
+            "send_times_used": read_send_times(e),
         }
         for e in complete
     ]
@@ -545,6 +660,127 @@ def _check_fittings(
                 f"{fingerprint}, so they came from one install. Not a failure, "
                 f"but treat them as one contributor for promotion."
             )
+
+    _check_send_times(hair, wig, complete, report)
+
+
+def _check_send_times(
+    hair: Hair, wig: Any, complete: list[dict[str, Any]], report: Report
+) -> None:
+    """Aggregate the send-times evidence the fittings carry.
+
+    Max, never mean. Send times is a threshold and not a tendency: a fitter
+    reporting 3 is saying "fewer than three was unreliable here", so averaging
+    [1, 3, 3] down to 2 produces a number that satisfies nobody who measured.
+
+    The spread is always printed alongside, because the max on its own hides
+    the interesting case. Three fittings that all say 1 and one that says 8 is
+    not a device that needs 8 frames, it is one room with a weak blaster, and
+    the person reading the gate output is the one who should decide that.
+    """
+    observed: list[tuple[str, int]] = []
+    silent = 0
+    for entry in complete:
+        who = str(entry.get("handle") or entry.get("github") or "?")
+        value = read_send_times(entry)
+        if value is None:
+            silent += 1
+            if SEND_TIMES_KEY in entry:
+                report.note(
+                    f"fitting by {who} carries a "
+                    f"{SEND_TIMES_KEY} of {entry.get(SEND_TIMES_KEY)!r}, which "
+                    f"is not a whole number of sends. Ignored: a garbled field "
+                    f"claims nothing, and absent is not 1."
+                )
+            continue
+        raw = entry.get(SEND_TIMES_KEY)
+        if isinstance(raw, int) and raw != value:
+            report.note(
+                f"fitting by {who} records {SEND_TIMES_KEY} of {raw}, clamped "
+                f"to {value}. A signature makes a value unaltered, not sane."
+            )
+        observed.append((who, value))
+
+    facts: dict[str, Any] = {
+        "reporting": len(observed),
+        "silent": silent,
+        "values": [{"who": who, "value": value} for who, value in observed],
+    }
+
+    if not observed:
+        facts["derived"] = None
+        facts["source"] = "none"
+        report.facts["send_times"] = facts
+        report.note(
+            f"no complete fitting records {SEND_TIMES_KEY}, so there is no "
+            f"evidence behind any send count. Absent is not 1: these fittings "
+            f"predate HAIR 0.9.0 rather than proving one frame was enough. Ask "
+            f"the fitter how many sends the device needed, and say in the "
+            f"generated README that the number came from them and not from a "
+            f"fitting."
+        )
+        return
+
+    values = [value for _, value in observed]
+    local_max = max(values)
+    facts["min"] = min(values)
+    facts["max"] = local_max
+
+    # Prefer HAIR's aggregate where this checkout has one. Two implementations
+    # of one rule is how the rule drifts.
+    hair_max = hair.send_times_max(wig)
+    if hair_max is None:
+        derived = local_max
+        source = f"factory fallback (HAIR {hair.version} has no aggregate)"
+    else:
+        derived = hair_max
+        source = "HAIR fitting_send_times_max"
+        if hair_max != local_max:
+            # HAIR counts every complete, hash-valid fitting whether or not it
+            # is signed; the factory's list has already had signature failures
+            # removed, and a signature failure is a hard refusal above. So the
+            # two agreeing is the normal case and a disagreement is worth
+            # saying out loud rather than quietly resolving.
+            derived = max(hair_max, local_max)
+            report.note(
+                f"HAIR reads a send-times max of {hair_max} and the factory "
+                f"reads {local_max} from the fittings it accepted. Using the "
+                f"higher, {derived}."
+            )
+
+    facts["derived"] = derived
+    facts["source"] = source
+    report.facts["send_times"] = facts
+
+    spread = (
+        f"{facts['min']} to {facts['max']}"
+        if facts["min"] != facts["max"]
+        else f"{facts['max']} throughout"
+    )
+    quiet = f", {silent} recording nothing" if silent else ""
+    report.ok(
+        f"send times: proven threshold {derived}, from "
+        f"{_fittings(len(observed))} reporting it, spread {spread}{quiet}"
+    )
+
+    # The wig's own per signal send_count is a different claim: a property of
+    # the code, where send times is a property of the room. A single knob in a
+    # generated integration cannot express a per code repeat, so if a wig ever
+    # carries one, say so rather than folding it into the default.
+    dittos = [
+        (signal.alias, int(getattr(signal, "send_count", 1)))
+        for signal in wig.signals
+        if int(getattr(signal, "send_count", 1)) > 1
+    ]
+    if dittos:
+        listing = ", ".join(f"{alias} x{count}" for alias, count in dittos)
+        report.note(
+            f"{len(dittos)} signal(s) carry a send_count above 1 in the wig "
+            f"itself: {listing}. That is a property of the code, not of the "
+            f"room, and one send-count setting cannot express it. Generate a "
+            f"per code repeat for those, or say in the README that they are "
+            f"sent once."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -827,6 +1063,89 @@ def check_coverage(codes: Any, wig: Any, report: Report) -> None:
         )
 
 
+def check_send_count(component_dir: Path, report: Report) -> None:
+    """The shipped default must not sit below what a fitter proved it needs.
+
+    This is the whole point of carrying send times through. A fitting that says
+    3 is a report that one frame did not reliably reach the device, and an
+    integration that ships a default of 1 anyway reproduces the fault the
+    fitter already found: buttons that work sometimes, with no pattern, on
+    hardware that is fine. Shipping under the proven threshold is a defect the
+    gate can see, so it refuses rather than warning.
+
+    Shipping above it is allowed and merely noted. More frames costs airtime,
+    not correctness.
+    """
+    send_times = report.facts.get("send_times") or {}
+    derived = send_times.get("derived")
+    constants = read_default_send_count(component_dir)
+    default = constants.get("DEFAULT_SEND_COUNT")
+
+    if default is None:
+        if derived and derived > SEND_TIMES_MIN:
+            report.fail(
+                f"the fittings prove this device needs {derived} sends per "
+                f"press, and the integration has no DEFAULT_SEND_COUNT to set. "
+                f"It will transmit once and drop presses on the hardware "
+                f"somebody already tested it on."
+            )
+        else:
+            report.note(
+                "the integration has no DEFAULT_SEND_COUNT. Fine for a device "
+                "that answers a single frame; add one the moment a fitting "
+                "says otherwise."
+            )
+        return
+
+    report.facts["default_send_count"] = default
+
+    low = constants.get("MIN_SEND_COUNT", SEND_TIMES_MIN)
+    high = constants.get("MAX_SEND_COUNT", SEND_TIMES_MAX)
+    if not low <= default <= high:
+        report.fail(
+            f"DEFAULT_SEND_COUNT is {default}, outside the integration's own "
+            f"{low}..{high} bounds. The shipped default has to be a value the "
+            f"config flow will accept."
+        )
+    if high > SEND_TIMES_MAX:
+        report.note(
+            f"the integration allows up to {high} sends where HAIR clamps send "
+            f"times to {SEND_TIMES_MAX}. Above that the airtime costs more than "
+            f"the reliability buys."
+        )
+
+    if derived is None:
+        report.note(
+            f"DEFAULT_SEND_COUNT is {default} with no fitting evidence behind "
+            f"it. Not a failure, but the generated README should say where the "
+            f"number came from."
+        )
+        return
+
+    if default < derived:
+        report.fail(
+            f"DEFAULT_SEND_COUNT is {default} but the fittings prove "
+            f"{derived} sends were needed. Ship at least what somebody "
+            f"measured, or the first thing a user finds is the fickleness the "
+            f"fitter already diagnosed."
+        )
+    elif default > derived:
+        report.ok(
+            f"DEFAULT_SEND_COUNT {default} is at or above the proven threshold "
+            f"of {derived}"
+        )
+        report.note(
+            f"DEFAULT_SEND_COUNT is {default} where the fittings prove "
+            f"{derived}. More conservative than the evidence, which is allowed; "
+            f"it costs airtime and nothing else."
+        )
+    else:
+        report.ok(
+            f"DEFAULT_SEND_COUNT {default} matches the proven threshold of "
+            f"{derived}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -862,13 +1181,29 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
                 f"  accounts:      {report.facts.get('promotion_handles', 0)} "
                 f"of {PROMOTION_HANDLES} for promotion"
             )
+            send_times = report.facts.get("send_times") or {}
+            if send_times.get("derived"):
+                basis = (
+                    f"max across "
+                    f"{_fittings(int(send_times.get('reporting') or 0))}, "
+                    f"spread {send_times.get('min')} to "
+                    f"{send_times.get('max')}"
+                )
+                print(f"  send times:    {send_times['derived']} ({basis})")
+            else:
+                print(
+                    "  send times:    not recorded by any fitting. Ask the "
+                    "fitter, and say so."
+                )
             for fitting in report.facts.get("fittings", []):
+                sends = fitting.get("send_times_used")
                 print(
                     f"  fitting:       {fitting.get('handle')} "
                     f"(github: {fitting.get('github') or 'none'}) "
                     f"{fitting.get('date')} "
                     f"HAIR {fitting.get('hair_version')} "
-                    f"key {fitting.get('key_fingerprint') or 'unsigned'}"
+                    f"key {fitting.get('key_fingerprint') or 'unsigned'} "
+                    f"sends {sends if sends is not None else 'not recorded'}"
                 )
     else:
         print(f"GATE FAILED: {len(report.failures)} problem(s). Nothing publishes.")
@@ -952,6 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
                 if codes is not None:
                     check_forward(hair, codes, identities, report)
                     check_coverage(codes, wig, report)
+                check_send_count(codes_path.parent, report)
             if decoder_path is not None:
                 try:
                     decoder = _load_module(decoder_path, decoder_path.stem)
