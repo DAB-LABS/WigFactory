@@ -139,9 +139,23 @@ the bar.
 
 The standing promotion bar is **three complete fittings from three distinct
 GitHub accounts**. The gate reports the count on every run and enforces it
-only when you pass `--require-handles 3`. That is on purpose: the candle POC
-carries a written exemption, and an exemption applied silently is not an
-exemption.
+only when you pass `--require-handles 3`.
+
+**Exemptions are written down or they do not exist.** Not passing the flag
+is how a bar quietly stops being a bar, so a waiver lives in
+`EXEMPTIONS.md` and the gate reads it:
+
+```bash
+.venv/bin/python verify/verify_wig.py --wig <slug> --integration <path> \
+  --require-handles 3 --exemption EXEMPTIONS.md
+```
+
+With an entry matching the wig, the handle failure becomes a loud note that
+quotes the reason back into the build output, so the published artifact's
+log says out loud that it published under a waiver and why. With no matching
+entry it still refuses. Each entry names the wig, the bar waived, the
+reason, who ruled it, the date, and the condition that retires it. One wig's
+waiver never covers another.
 
 It also reads **send times** off the fittings. A fitting made on HAIR 0.9.0 or
 later carries `send_times_used`: how many times each signal had to be
@@ -197,16 +211,59 @@ Buttons are always generated, one per signal. The wrapper is additional.
 
 **Naming.** Ruled and not open for redesign:
 
-- Repository: `<brand>-<kind>-<model>-infrared`, lowercase kebab, `kind`
-  squashed to one word with no inner dashes.
-- Domain: `<brand>_<model>`, lowercase snake. Per device, not per brand:
-  `<brand>_infrared` collides the day that brand sells a second product.
+- Repository: `<brand>-<kind>-<model>-ir`, lowercase kebab, `kind` squashed
+  to one word with no inner dashes.
+- Domain: `<brand>_<model>_ir`, lowercase snake. Per device, not per brand:
+  `<brand>_ir` collides the day that brand sells a second product.
 - Pieces drop out when genuinely absent. Fall back to the wig's name slug
   when almost nothing is known.
 
 The wig file in the Wig Shop is `<brand>-<kind>-<model>.wig.json`, so the
-repository name is the wig's stem plus `-infrared`. That is deliberate. A
-wig carries its own future name from the day it lands.
+repository name is the wig's stem plus `-ir`. That is deliberate. A wig
+carries its own future name from the day it lands.
+
+**The `-ir` suffix names the medium, and it goes in the domain too.** Radio
+frequency is the obvious second medium, and `-rf` is the obvious second
+suffix. A repository suffix alone would not be enough: two repositories can
+have different names and still ship components with the same domain, and
+Home Assistant cannot load two integrations that share one. So an IR and an
+RF version of one device need `sanmli_th05_ir` and `sanmli_th05_rf`, not one
+`sanmli_th05` fought over.
+
+The domain is close to invisible to users. It is the folder under
+`custom_components/`, the string in `manifest.json`, `DOMAIN` in `const.py`,
+and the prefix on log lines. It does not reach entity IDs, because entities
+are named from the device. But it is baked into the config entry and the
+device registry the moment somebody installs, so changing it later is not a
+rename: their integration goes unavailable, they re-add it, and they lose
+their entity IDs and history. Get it right before the first publish, because
+after that it is permanent.
+
+**Casing, ruled and not open.** The slug and the domain are lowercase.
+Home Assistant requires it of the domain and enforces it in hassfest, the
+Wig Shop enforces it on the wig filename with a regex, and GitHub lowercases
+repository topics itself. Casing is not a discoverability lever either:
+GitHub search is case insensitive, so what surfaces a repository is the
+description, the topics and the README body, not the shape of the slug.
+
+**Identity fields feed labels, never identifiers.** The wig carries
+`brand`, `model`, `kind` and `name` with real human casing, and those are
+the right source for every human-facing string: the `name` in
+`manifest.json` and `hacs.json`, the README heading, the repository
+description, the topics. They are the wrong source for the slug, the domain
+or the folder, for three reasons.
+
+- They are mutable. The canonical hash covers only `alias`, `pronto` and
+  `send_count`, so brand and model can be corrected without invalidating a
+  single fitting. The filename cannot drift, because under the shop's
+  immutability rule a rename is a new file.
+- They are free text. `name` on the candle wig is `Candles (Tea Light)`,
+  and parentheses are not legal in a repository name. Deriving identifiers
+  from them means a sanitizer, which is a hand-applied casing spec hiding
+  in code.
+- `model` is `TH-05`. Field-derived naming reintroduces the inner dash that
+  the squashing rule exists to remove, and then nothing can tell a segment
+  separator from part of a model number.
 
 **The codebook table.** Derive it mechanically from the decoded identities,
 never by hand and never by pattern matching on aliases:
@@ -312,7 +369,7 @@ repository furniture around it.
 
 ```
 <device>/
-  <brand>-<kind>-<model>-infrared/
+  <brand>-<kind>-<model>-ir/
     custom_components/<domain>/
       __init__.py          forward the platforms, set up and unload the entry
       codes.py             the codebook from step 3, plus WIG_ALIASES
@@ -467,16 +524,101 @@ Gates, all of them, before anything is pushed:
 Then:
 
 - New repository on `DAB-LABS`, named per step 3.
-- **Repository topics `home-assistant` and `hacs-integration`.** HACS
-  validation fails without both, and the failure message does not tell you
-  that.
+- **At least one repository topic.** The HACS action checks that the topic
+  list is not empty and nothing more. It does not require any particular
+  topic, and the widely repeated claim that `home-assistant` and
+  `hacs-integration` are mandatory is false: both sit on HACS's own
+  `TOPIC_FILTER` denylist, which strips them because every HACS repository
+  carries them and they are worthless for search. Set topics that describe
+  the device instead, from the wig's fields: brand, model, kind, protocol.
+- **A repository description, and Issues enabled.** Both are checked by the
+  action, neither lives in a file, and both are easy to forget because they
+  are set on the repository rather than committed to it.
 - `hacs.json` with a `homeassistant` minimum matching the platform features
-  used.
+  used. Keep it to keys HACS's schema actually accepts; it uses
+  `PREVENT_EXTRA`, so an unknown key is a hard validation failure rather
+  than something ignored. `render_readme` is accepted but vestigial, with no
+  consumers in current HACS, so do not write it.
+- `custom_components/<domain>/brand/icon.png`. The action's brand check
+  wants it, and since Home Assistant 2026.3 an integration can ship its own
+  brand images rather than registering in `home-assistant/brands`. Note the
+  gap: HACS's own panel still reads `brands.home-assistant.io` for update
+  entity icons, so a locally shipped icon renders everywhere in Home
+  Assistant except inside HACS itself. Living with a placeholder there is
+  fine; the brands repository submission is optional and separate.
+- **A GitHub release at creation, `v0.1.0`, with generated notes.**
 - Ship marked untested by others, carrying the fittings that came in with
   the wig.
-- Add the graduation pointer to the wig's entry in the Wig Shop index.
 
-Give the owner the git commands. Do not run pushes yourself.
+**Why the release matters, and it is not ceremony.** With no releases at
+all, HACS installs from the default branch and treats the branch HEAD as the
+version, showing users a seven character commit SHA. Every commit that lands
+then reads as an available update, including a README typo and every merged
+pull request, and there are no release notes to explain any of it. That is
+how people learn to ignore your updates.
+
+The moment one release exists, HACS stops looking at the branch entirely:
+its version selection checks for a release first and only falls through to
+the branch when there is none. So cutting `v0.1.0` at creation is what makes
+main safe to commit to. It also keeps the door open to the HACS default
+store later, which hard-requires a published release and does not accept a
+bare tag.
+
+The Wig Shop stays out of this. It is a separate repository with its own
+validation, and the publish path does not write to it.
+
+---
+
+### 7.1 The publish path is automated, and that is a scoped exception
+
+Ground rule 8 and the owner's standing instruction are that you hand over
+git commands rather than running them. **The publish path is the exception,
+and only the publish path.** Everything else still gets handed over.
+
+The reason is volume: this is meant to run over many wigs, and a human
+pasting repository creation commands per device is the bottleneck the
+factory exists to remove.
+
+The shape:
+
+**Survey first.** Walk the Wig Shop clone and sort every wig into ready,
+blocked on fittings, out of scope, or already built. Every criterion is
+something the gate already computes, so nothing here is judgement. That
+listing is the proposal the owner picks from. Do not build anything before
+they have picked.
+
+**Then publish, per chosen wig.** One script does all of it:
+
+1. **Re-runs the gate itself**, with `--require-handles 3` or a matching
+   `--exemption`. Non-zero exit stops everything. This is load bearing: a
+   green run from earlier proves nothing about the tree now, so publication
+   is gated by construction rather than by whoever remembered.
+2. Derives the repository name from the wig stem plus `-ir`, and the
+   description and topics from the wig's `brand`, `model`, `kind` and
+   `identifiers`.
+3. **Refuses if the repository already exists.** Create only. Once
+   published, an integration has its own life: somebody opens a pull
+   request, it gets merged, and the repository now holds commits the factory
+   has never seen. A publisher that re-pushed would destroy them silently.
+   Republishing is a different tool with different rules and it does not
+   exist yet.
+4. Creates it, sets description, topics and Issues, pushes a clean initial
+   commit from a fresh `git init` rather than a subtree of this repository,
+   then cuts the release.
+5. **Dry run unless `--publish` is passed.** A bad run leaves a public
+   repository carrying the organization's name, and unlike a bad commit you
+   cannot quietly amend it away.
+6. **Stops for the owner between building and pushing.** They see what is
+   about to be created. After the push it is a normal repository with a
+   normal pull request process, and the factory does not reach back in.
+
+**Credentials.** Use `gh` when it is present and authenticated, so the
+credential stays in the OS keychain and nothing here ever handles a secret.
+Fall back to a token from the environment when it is not. Never read a
+credential from a file in a repository, never echo one, and **never write
+anything about credentials into public text**: not a path, not a scope list,
+not which machine holds what. Naming where a secret lives is a leak even
+when the secret is not in the file.
 
 ---
 
@@ -515,3 +657,50 @@ not transfer anybody's understanding, and understanding is what upstream is
 asking for.
 
 Raise it with the owner and stop there.
+
+---
+
+### 8.1 The shared codec package, decided but not yet built
+
+Every generated integration vendors its own `decoder.py`. At one integration
+that is correct. At a fleet it means one bug lives in N copies, and the gate
+cannot pre-empt the bug that matters: it proves a codec against the signals
+in the wigs it was run with, and says nothing about malformed input, a new
+timing shape, or a protocol edge no wig has exercised. Home Assistant has
+already changed the timing shape handed to receivers once, which is what
+broke `lg_infrared`.
+
+**Decision: a shared package, `dab-labs-ir-codecs` on PyPI, when the fleet
+reaches roughly five integrations.** Not before. Generated integrations then
+declare it in `requirements`, which is a PyPI specifier and so already legal
+under the no-VCS-URLs rule.
+
+What it buys: one place to author the fix, one test suite exercising the
+edges no wig covers, N one-line pull requests to ship rather than N code
+reviews, and a staging ground where codecs mature under this project's own
+governance before a human ports one upstream. That last part matters
+because, per the policy above, upstreaming is a human act on a human's
+schedule, so codecs need somewhere to live and be exercised in the meantime.
+
+Two things to get right when it happens:
+
+**Pin with `~=`, not `==`.** Home Assistant installs integration
+requirements into one shared environment. A user with three of these
+integrations pinned to three exact versions creates a conflict, because only
+one version can be present. Compatible-release specifiers let them coexist.
+
+**Two edits ship a codec fix, and only one of them does the work.** The
+requirement specifier is what pulls the new package; `manifest.json`'s
+`version` is a label Home Assistant displays. Bump the version and forget
+the specifier and everything still looks right: HACS offers an update, the
+user takes it, and they run new integration files against the old package.
+Silent, and successful from every visible angle. Whatever automates the
+fleet bump treats the specifier as load bearing.
+
+Note also that nothing propagates on its own. Home Assistant installs a
+requirement only when it is not already satisfied
+(`homeassistant/requirements.py`), so a PyPI release alone never reaches an
+existing install. It always travels through a manifest edit, a HACS update
+the user chooses, and a restart. That is a safety property, not a
+limitation: a package release that changed behaviour inside installs which
+saw no update would be an incident with nothing to roll back to.

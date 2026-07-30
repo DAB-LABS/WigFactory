@@ -1,6 +1,6 @@
 # Sanmli TH-05 Candles
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DAB-LABS&repository=sanmli-candles-th05-infrared&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=DAB-LABS&repository=sanmli-candles-th05-ir&category=integration)
 
 Home Assistant control for a set of infrared LED tea light candles, over any infrared blaster Home Assistant can already talk to.
 
@@ -54,9 +54,9 @@ So the steps are buttons, where a press means a press, and the light reports onl
 
 ## Installing
 
-**Through HACS.** Use the badge above, or add `https://github.com/DAB-LABS/sanmli-candles-th05-infrared` as a custom repository of type Integration, then install and restart.
+**Through HACS.** Use the badge above, or add `https://github.com/DAB-LABS/sanmli-candles-th05-ir` as a custom repository of type Integration, then install and restart.
 
-**By hand.** Copy `custom_components/sanmli_th05` into your `config/custom_components/` and restart.
+**By hand.** Copy `custom_components/sanmli_th05_ir` into your `config/custom_components/` and restart.
 
 Then add the integration from **Settings, Devices and services, Add integration**, and pick the infrared emitter that can reach the candles. A receiver is optional; without one you simply get no event entity.
 

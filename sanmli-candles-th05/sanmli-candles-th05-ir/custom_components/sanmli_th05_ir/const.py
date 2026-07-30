@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-DOMAIN = "sanmli_th05"
+DOMAIN = "sanmli_th05_ir"
 
 CONF_INFRARED_ENTITY_ID = "infrared_entity_id"
 CONF_INFRARED_RECEIVER_ENTITY_ID = "infrared_receiver_entity_id"
