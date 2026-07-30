@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import collections
 import importlib
 import importlib.util
 import json
@@ -372,6 +373,19 @@ class Hair:
         except BaseException:  # noqa: BLE001 - see comment above
             self.wig_fitting = None
 
+        # Matrix wigs. `wig_climate` owns the dimension checklist, which is
+        # what a matrix fitting actually walks, and `cell_key` owns the key
+        # format. Both are HAIR's to define, and the factory reading a lattice
+        # by its own rules is how the two ends stop agreeing about what was
+        # proven.
+        self.wig_climate: Any | None
+        try:
+            self.wig_climate = importlib.import_module(
+                "custom_components.hair.wig_climate"
+            )
+        except BaseException:  # noqa: BLE001
+            self.wig_climate = None
+
     @property
     def version(self) -> str:
         manifest = self.root / "custom_components" / "hair" / "manifest.json"
@@ -392,6 +406,18 @@ class Hair:
             return None
         raw = command.get_raw_timings()
         return raw or None
+
+    def content_hash(self, wig: Any) -> str:
+        """The wig's canonical hash: signals for v1, cells for a matrix."""
+        return self.wig_format.wig_content_hash(wig)
+
+    def fitting_rows(self, wig: Any) -> list[tuple[str, str, int]]:
+        """What a fitting walks: aliases for v1, the checklist for a matrix."""
+        return self.wig_fitting.fitting_rows(wig)
+
+    def cell_key(self, cell: Any) -> str:
+        """HAIR's cell key, `cool/auto/23` shaped. Never reimplement this."""
+        return self.wig_format.cell_key(cell)
 
     def send_times_max(self, wig: Any) -> int | None:
         """HAIR's own send-times aggregate, or None if this HAIR predates it."""
@@ -458,15 +484,9 @@ def run_input_gate(
     wig = result.wig
     report.ok(f"parses as a wig through HAIR {hair.version}")
 
-    if getattr(wig, "climate", None) is not None:
-        report.fail(
-            "matrix wigs (hair-wig/2 climate block) are out of scope. A codec "
-            "that compresses a state matrix is the next target, not this one."
-        )
-        return None
-
-    if not wig.signals:
-        report.fail("wig has no signals")
+    matrix = getattr(wig, "climate", None)
+    if matrix is None and not wig.signals:
+        report.fail("wig has neither signals nor a climate block")
         return None
 
     report.facts["name"] = wig.name
@@ -475,11 +495,15 @@ def run_input_gate(
     report.facts["kind"] = wig.kind
     report.facts["signal_count"] = len(wig.signals)
     report.facts["hair_version"] = hair.version
+    report.facts["shape"] = "matrix" if matrix is not None else "signals"
 
     aliases = [signal.alias for signal in wig.signals]
     if len(set(aliases)) != len(aliases):
         duplicates = sorted({a for a in aliases if aliases.count(a) > 1})
         report.fail(f"duplicate aliases in the wig: {', '.join(duplicates)}")
+
+    if matrix is not None:
+        check_matrix(hair, wig, matrix, report)
 
     _check_fittings(hair, wig, report, require_handles)
     return wig
@@ -514,10 +538,16 @@ def _check_fittings(
         )
         return
 
-    expected_hash = hair.wig_format.signals_content_hash(wig.signals)
+    # One path for both wig shapes, via HAIR's own definitions. For a signal
+    # wig the hash covers the signals and the rows are aliases; for a matrix
+    # the hash covers the cells and the rows are the dimension checklist, a
+    # deterministic 12 to 20 row walk rather than the whole lattice. Nobody
+    # fits 960 cells; everybody can fit every dimension.
+    expected_hash = hair.content_hash(wig)
     report.facts["content_hash"] = expected_hash
 
-    rows = {signal.alias for signal in wig.signals}
+    rows = {key for key, _, _ in hair.fitting_rows(wig)}
+    report.facts["fitting_row_count"] = len(rows)
     complete: list[dict[str, Any]] = []
 
     for index, entry in enumerate(fittings):
@@ -768,9 +798,7 @@ def _check_send_times(
     # generated integration cannot express a per code repeat, so if a wig ever
     # carries one, say so rather than folding it into the default.
     dittos = [
-        (signal.alias, int(getattr(signal, "send_count", 1)))
-        for signal in wig.signals
-        if int(getattr(signal, "send_count", 1)) > 1
+        (key, count) for key, _, count in hair.fitting_rows(wig) if count > 1
     ]
     if dittos:
         listing = ", ".join(f"{alias} x{count}" for alias, count in dittos)
@@ -780,6 +808,272 @@ def _check_send_times(
             f"room, and one send-count setting cannot express it. Generate a "
             f"per code repeat for those, or say in the README that they are "
             f"sent once."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Matrix wigs: checking a lattice instead of a codebook
+# ---------------------------------------------------------------------------
+
+
+def _axes(cell: Any) -> tuple[Any, Any, Any]:
+    """The non-temperature coordinates of a cell: its row in the lattice."""
+    return (
+        getattr(cell, "mode", None),
+        getattr(cell, "fan", None),
+        getattr(cell, "swing", None),
+    )
+
+
+def check_matrix(hair: Hair, wig: Any, matrix: Any, report: Report) -> None:
+    """Everything a state lattice has to be before anything is generated.
+
+    A signal wig is checked by building a second implementation and making the
+    two agree. A lattice has no codebook to disagree with, so the checks are
+    about the lattice itself: is it complete, is it reachable, and does it
+    contradict itself. Those turn out to catch real defects. Across six real
+    SmartIR conversions they found four duplicate-neighbour temperatures, one
+    truncated frame and one missing cell, none of which is visible to a human
+    reading the file.
+    """
+    cells = list(matrix.cells)
+    if not cells:
+        report.fail("climate block has no cells")
+        return
+
+    report.facts["cell_count"] = len(cells)
+    report.facts["modes"] = list(matrix.modes)
+    report.facts["fan_modes"] = list(matrix.fan_modes)
+    report.facts["swing_modes"] = list(matrix.swing_modes)
+    report.facts["temp_range"] = [matrix.min_temp, matrix.max_temp]
+    report.facts["precision"] = matrix.precision
+    report.facts["has_on_code"] = matrix.on is not None
+
+    # The unit is defaulted rather than written in every file seen so far, and
+    # a Fahrenheit lattice read as Celsius is a silent 30-degree error. Assert
+    # rather than assume: the day an F wig arrives it should stop the build.
+    unit = getattr(matrix, "unit", "C")
+    report.facts["unit"] = unit
+    if unit != "C":
+        report.fail(
+            f"climate block is in {unit}, and every path here assumes Celsius. "
+            f"Fahrenheit is a format feature nothing has exercised yet, so it "
+            f"stops the build rather than being guessed at."
+        )
+
+    _check_lattice_shape(hair, matrix, cells, report)
+    _check_lattice_consistency(hair, matrix, cells, report)
+
+
+def _check_lattice_shape(
+    hair: Hair, matrix: Any, cells: list[Any], report: Report
+) -> None:
+    """Completeness and reachability.
+
+    Home Assistant's climate entity offers the user every combination of the
+    modes, fan modes and swing modes the integration advertises. A hole in the
+    lattice is therefore not a missing row in a table, it is a control that
+    does nothing when somebody uses it, with no error and no log line.
+    """
+    temps = sorted({c.temp for c in cells if c.temp is not None})
+    report.facts["temp_values"] = temps
+
+    have = {(_axes(c), c.temp) for c in cells}
+    missing: list[str] = []
+    for mode in matrix.modes:
+        for fan in matrix.fan_modes or [None]:
+            for swing in matrix.swing_modes or [None]:
+                for temp in temps or [None]:
+                    if ((mode, fan, swing), temp) not in have:
+                        missing.append(
+                            "/".join(
+                                str(p)
+                                for p in (mode, fan, swing, temp)
+                                if p is not None
+                            )
+                        )
+
+    duplicates = collections.Counter((_axes(c), c.temp) for c in cells)
+    repeated = [k for k, n in duplicates.items() if n > 1]
+    if repeated:
+        report.fail(
+            f"{len(repeated)} coordinate(s) appear more than once in the "
+            f"lattice. One state, one cell."
+        )
+
+    if missing:
+        report.facts["missing_cells"] = missing
+        shown = ", ".join(missing[:6])
+        more = f", and {len(missing) - 6} more" if len(missing) > 6 else ""
+        report.fail(
+            f"{len(missing)} lattice cell(s) are missing: {shown}{more}. Home "
+            f"Assistant will offer the user every combination the integration "
+            f"advertises, so a hole is a control that silently does nothing."
+        )
+    else:
+        report.ok(
+            f"lattice complete: {len(cells)} cell(s) cover every combination "
+            f"of {len(matrix.modes)} mode(s), "
+            f"{len(matrix.fan_modes) or 1} fan setting(s), "
+            f"{len(matrix.swing_modes) or 1} swing setting(s) and "
+            f"{len(temps)} temperature(s)"
+        )
+
+
+def _check_lattice_consistency(
+    hair: Hair, matrix: Any, cells: list[Any], report: Report
+) -> None:
+    """Does the lattice contradict itself?
+
+    Duplicate codes inside a lattice are usually correct. A device that ignores
+    temperature in fan_only genuinely sends one code for all of them, and that
+    is a fact the generated integration needs, because offering a temperature
+    control there would be a lie.
+
+    The distinction that matters is whether the collapse is total. A whole row
+    sharing one code means the device ignores that dimension. Part of a row
+    sharing one code means the row proves the device responds to temperature,
+    and then two values collide anyway. That is a defect, and on real files it
+    is invariably a neighbour: 18 carrying 19's frame.
+    """
+    rows: dict[tuple[Any, Any, Any], dict[Any, str]] = {}
+    for cell in cells:
+        norm = " ".join(cell.pronto.split()).lower()
+        rows.setdefault(_axes(cell), {})[cell.temp] = norm
+
+    collapsed: list[tuple[Any, Any, Any]] = []
+    defects: list[str] = []
+    for axes, by_temp in rows.items():
+        distinct = len(set(by_temp.values()))
+        if len(by_temp) > 1 and distinct == 1:
+            collapsed.append(axes)
+        elif distinct != len(by_temp):
+            inverse: dict[str, list[Any]] = {}
+            for temp, pronto in by_temp.items():
+                inverse.setdefault(pronto, []).append(temp)
+            for clash in (v for v in inverse.values() if len(v) > 1):
+                label = "/".join(str(p) for p in axes if p is not None)
+                defects.append(f"{label} at {', '.join(str(t) for t in sorted(clash))}")
+
+    report.facts["temperature_ignored_rows"] = [
+        "/".join(str(p) for p in axes if p is not None) for axes in collapsed
+    ]
+
+    if collapsed:
+        modes = sorted({str(a[0]) for a in collapsed})
+        report.ok(
+            f"{len(collapsed)} of {len(rows)} row(s) send one code for every "
+            f"temperature, in mode(s) {', '.join(modes)}. The device ignores "
+            f"temperature there and the integration must not offer it"
+        )
+
+    if defects:
+        report.facts["lattice_defects"] = defects
+        listing = "; ".join(defects[:8])
+        more = f"; and {len(defects) - 8} more" if len(defects) > 8 else ""
+        report.fail(
+            f"{len(defects)} row(s) collide on some temperatures but not "
+            f"others: {listing}{more}. The row proves the device responds to "
+            f"temperature, so identical codes at two settings means one of "
+            f"them transmits the wrong state. Fix the wig; do not generate "
+            f"around it."
+        )
+    elif rows:
+        report.ok(
+            "no partial collisions: every row either varies with temperature "
+            "throughout or ignores it throughout"
+        )
+
+    _check_frame_shape(hair, cells, report)
+
+
+def _frame_shape(hair: Hair, pronto: str) -> tuple[int, ...] | None:
+    """Timings per frame, splitting on any gap over 5ms.
+
+    Every cell of one device sends the same protocol, so every cell should
+    have the same frame shape. Comparing shapes rather than total Pronto
+    length is what turns "this cell is different" into a diagnosis.
+    """
+    timings = hair.timings_from_pronto(pronto)
+    if timings is None:
+        return None
+    frames: list[int] = []
+    count = 0
+    for value in timings:
+        if value < 0 and -value > 5000:
+            if count:
+                frames.append(count)
+                count = 0
+            continue
+        count += 1
+    if count:
+        frames.append(count)
+    return tuple(frames)
+
+
+def _check_frame_shape(hair: Hair, cells: list[Any], report: Report) -> None:
+    """Every cell of one device should carry the same frame structure.
+
+    Two things show up here, and they are not equally serious. A frame that is
+    short is a truncated capture: bits are missing and the code is wrong. A
+    stray extra burst after the last frame is capture noise that a receiver
+    will ignore. Both are reported, only the first refuses.
+    """
+    shapes = collections.Counter(
+        shape
+        for shape in (_frame_shape(hair, c.pronto) for c in cells)
+        if shape is not None
+    )
+    if not shapes:
+        return
+    normal, count = shapes.most_common(1)[0]
+    if len(shapes) == 1:
+        report.ok(
+            f"every cell carries the same frame shape: "
+            f"{len(normal)} frame(s) of {', '.join(str(n) for n in normal)} "
+            f"timings"
+        )
+        return
+
+    short: list[str] = []
+    noisy: list[str] = []
+    for cell in cells:
+        shape = _frame_shape(hair, cell.pronto)
+        if shape is None or shape == normal:
+            continue
+        key = hair.cell_key(cell)
+        body = shape[: len(normal)]
+        if len(shape) > len(normal) and body == normal:
+            extra = shape[len(normal) :]
+            noisy.append(f"{key} (+{sum(extra)} stray timing(s))")
+        else:
+            deltas = [
+                b - a
+                for a, b in zip(normal, body + (0,) * (len(normal) - len(body)))
+            ]
+            noted = ", ".join(
+                f"frame {i} {d:+d}" for i, d in enumerate(deltas) if d
+            )
+            short.append(f"{key} ({noted or 'different shape'})")
+
+    report.facts["frame_shape"] = {
+        "normal": list(normal),
+        "malformed": short,
+        "noisy": noisy,
+    }
+    if noisy:
+        report.note(
+            f"{len(noisy)} cell(s) carry a stray burst after the last frame: "
+            f"{', '.join(noisy[:5])}. A receiver ignores it, so this is "
+            f"capture noise rather than a wrong code, but it means the "
+            f"capture was not clean."
+        )
+    if short:
+        report.fail(
+            f"{len(short)} cell(s) have a malformed frame against the "
+            f"{count} that agree: {', '.join(short[:6])}. Timings missing "
+            f"from a frame means bits missing from the code, and the device "
+            f"will not do what the cell says."
         )
 
 
