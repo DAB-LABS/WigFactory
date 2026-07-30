@@ -10,29 +10,55 @@
         "description": "Choose the infrared emitter that can reach the candles. A receiver is optional and lets Home Assistant react when the physical remote is used.",
         "data": {
           "infrared_entity_id": "Infrared emitter",
-          "infrared_receiver_entity_id": "Infrared receiver"
+          "infrared_receiver_entity_id": "Infrared receiver",
+          "send_count": "Frames per press"
         },
         "data_description": {
           "infrared_entity_id": "The blaster that sends commands to the candles.",
-          "infrared_receiver_entity_id": "Optional. Lets automations trigger on presses of the handheld remote."
+          "infrared_receiver_entity_id": "Optional. Lets automations trigger on presses of the handheld remote.",
+          "send_count": "How many times each command transmits. These candles sample their receiver on a duty cycle, so a single frame is sometimes missed and a press appears to do nothing. Three is what the bench set needed. Raise it if presses still get dropped, lower it if one is enough."
         }
       }
     }
   },
   "entity": {
     "button": {
-      "on": { "name": "On" },
-      "off": { "name": "Off" },
-      "brighten": { "name": "Brighten" },
-      "dim": { "name": "Dim" },
-      "candle_like": { "name": "Candle effect" },
-      "flicker": { "name": "Flicker effect" },
-      "fade_out": { "name": "Fade out effect" },
-      "solid_light": { "name": "Solid light" },
-      "timer_2h": { "name": "2 hour timer" },
-      "timer_4h": { "name": "4 hour timer" },
-      "timer_6h": { "name": "6 hour timer" },
-      "timer_8h": { "name": "8 hour timer" }
+      "on": {
+        "name": "On"
+      },
+      "off": {
+        "name": "Off"
+      },
+      "brighten": {
+        "name": "Brighten"
+      },
+      "dim": {
+        "name": "Dim"
+      },
+      "candle_like": {
+        "name": "Candle effect"
+      },
+      "flicker": {
+        "name": "Flicker effect"
+      },
+      "fade_out": {
+        "name": "Fade out effect"
+      },
+      "solid_light": {
+        "name": "Solid light"
+      },
+      "timer_2h": {
+        "name": "2 hour timer"
+      },
+      "timer_4h": {
+        "name": "4 hour timer"
+      },
+      "timer_6h": {
+        "name": "6 hour timer"
+      },
+      "timer_8h": {
+        "name": "8 hour timer"
+      }
     },
     "event": {
       "received_command": {
@@ -55,6 +81,20 @@
               "unknown": "Unknown"
             }
           }
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sanmli TH-05 candles",
+        "description": "How many times should each command transmit? Raise this if button presses are sometimes ignored.",
+        "data": {
+          "send_count": "Frames per press"
+        },
+        "data_description": {
+          "send_count": "A press on the handheld remote sends the same code several times. Matching that makes presses land reliably."
         }
       }
     }

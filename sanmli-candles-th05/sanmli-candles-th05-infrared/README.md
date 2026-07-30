@@ -30,7 +30,15 @@ Identifiers, in case yours is the same hardware wearing a different name:
 
 **Twelve buttons**, one per button on the physical remote, including the two brightness steps and the four sleep timers.
 
-**An event entity**, if you have an infrared receiver. It fires when somebody picks up the handheld remote, so an automation can follow along.
+**An event entity**, if you have an infrared receiver. It fires when somebody picks up the handheld remote, so an automation can follow along. That is what the receiver picker during setup is for: the emitter is how Home Assistant talks to the candles, the receiver is how it listens to the handheld. Skip it and you simply get no event entity.
+
+### Frames per press
+
+Each command transmits three times by default, about a tenth of a second apart. That is a setting, under the integration's Configure.
+
+A press on the handheld remote is not one transmission. RC-5 re-sends the same code every 114ms for as long as you hold the key, so a real press is three or four frames. These candles appear to sample their infrared receiver on a duty cycle to save battery, which means a single frame can arrive while the receiver is asleep and be missed completely. On the bench that looked like a button working on the first press sometimes and needing three presses other times, with no pattern.
+
+Three frames fixed it. If presses still get dropped, raise it. If one is plenty for your set, lower it and save the airtime.
 
 ### Why there is no brightness slider
 
@@ -111,7 +119,9 @@ The RC-5 toggle bit is excluded from all of this, because it records which press
 
 **Nothing responds at all.** Check the blaster has line of sight; infrared will not go round a corner or through a sofa. Try the buttons before the light, since a button is one code and nothing else.
 
-**Some buttons work and others do not.** That is worth an issue. It usually means a code was captured cleanly but the candle wants it repeated, and that is a one line fix.
+**Presses are sometimes ignored.** Raise **Frames per press** under Configure. See the section above; this is the single most likely thing to need adjusting on hardware other than the bench set.
+
+**Some buttons work and others never do.** That is worth an issue, and it means something different from the above: a code that never works was probably captured cleanly but wants different treatment from its neighbours.
 
 **It works on candles that are not Sanmli.** Also worth an issue, and genuinely useful: it tells everyone the same hardware ships under more than one name. Include whatever brand is on your box.
 
