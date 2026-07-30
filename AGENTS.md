@@ -157,6 +157,49 @@ entry it still refuses. Each entry names the wig, the bar waived, the
 reason, who ruled it, the date, and the condition that retires it. One wig's
 waiver never covers another.
 
+### Matrix wigs
+
+A `hair-wig/2` wig carries a climate block instead of, or as well as, a list
+of signals: a lattice of cells, one per complete device state. There is no
+codebook to build a second implementation of, so the checks are about the
+lattice contradicting itself, and on real files they find plenty.
+
+- **Completeness.** Home Assistant offers the user every combination of the
+  modes, fan modes and swing modes the integration advertises. A hole is not
+  a missing table row, it is a control that silently does nothing.
+- **Collapsed rows are a feature, not a fault.** A row where every
+  temperature sends one code means the device ignores temperature there.
+  Daikin does it in 19 rows of 40. The integration must not offer a
+  temperature control in those combinations.
+- **Partial collapse is a defect.** If a row varies with temperature at most
+  settings and then two adjacent values collide, one of them transmits the
+  wrong state. On real files it is always a neighbour: 18 carrying 19's
+  frame.
+- **Frame shape.** Every cell of one device sends the same protocol, so every
+  cell should have the same frames of the same lengths. A short frame is a
+  truncated capture and refuses. A stray burst after the last frame is
+  capture noise and only notes.
+- **Celsius is asserted, not assumed.** The format carries a `unit`, and a
+  Fahrenheit lattice read as Celsius is a silent thirty degree error.
+
+Fittings on a matrix wig attest the **dimension checklist**, a deterministic
+12 to 20 row walk, not the whole lattice. That is HAIR's definition and the
+gate reads it from HAIR rather than reimplementing it. Nobody fits 960 cells.
+
+To see how a device packs its state, run the microscope:
+
+```bash
+.venv/bin/python verify/derive_fields.py --wig <wig>
+```
+
+It lines up every cell, finds the bit positions that move, groups them into
+runs and says which dimension each run tracks. On Gree that is 15 moving bits
+out of 66; on Panasonic, 18 out of 216. It is not a check and it never
+refuses. The judgement is still yours: deciding a four bit run really is
+temperature, recognising a checksum, choosing what the entity exposes. The
+tool exists so you apply that judgement to a field map rather than to 63KB
+of hex.
+
 It also reads **send times** off the fittings. A fitting made on HAIR 0.9.0 or
 later carries `send_times_used`: how many times each signal had to be
 transmitted per press before the device answered, during the session that
