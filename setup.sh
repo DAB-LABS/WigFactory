@@ -125,7 +125,7 @@ fi
 if "$REPO_ROOT/.venv/bin/python" -c 'import infrared_protocols' 2>/dev/null; then
     echo "Upstream infrared-protocols is present."
 else
-    echo "Upstream infrared-protocols is NOT present: it needs Python 3.14.2"
+    echo "Upstream infrared-protocols is NOT present: it needs Python 3.14"
     echo "or newer and this environment is $($PY --version | cut -d' ' -f2)."
     echo "The gate falls back to HAIR's own decoders, which covers less."
 fi

@@ -76,7 +76,7 @@ reports no suitable interpreter, install one and run it again; it will not
 guess and it will not silently skip the gate.
 
 **There is a second floor, and it is softer.** Upstream `infrared-protocols`
-8.2.1 requires Python 3.14.2 or newer, which is why Home Assistant runs 3.14.
+8.2.1 requires Python 3.14 or newer, which is why Home Assistant runs 3.14.
 Below that it cannot be installed, so a 3.12 or 3.13 environment runs the
 gate on HAIR's own decoders alone: workable, and a smaller protocol set, with
 no local polyfill for NEC, and none for GE air conditioners either: those
