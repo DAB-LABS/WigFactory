@@ -215,6 +215,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"PULL REQUEST  {url}")
 
             if args.merge:
+                print("waiting for checks...")
+                passed, why = github.wait_for_checks(repo, branch)
+                print(f"checks       {why}")
+                if not passed:
+                    raise Refusal(
+                        f"not merging: {why}. The pull request is open at "
+                        f"{url} with the branch intact, so the run can be "
+                        f"read and rerun."
+                    )
                 github.merge_pr(repo, branch)
                 github.create_release(repo, tag)
                 print(f"MERGED and released {tag}")

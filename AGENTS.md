@@ -685,7 +685,17 @@ happens far more often than a first publish, so it is automated too:
 ```
 
 Dry run, then a pull request, then a pull request that merges itself and cuts
-the release. Two rules make the last of those safe to run without watching:
+the release.
+
+`--merge` **waits for the checks first** and refuses to merge on a failure, or
+on not being able to tell. That is not politeness. The first automated update
+merged its own pull request about twenty seconds into a forty-nine second
+validation run, and deleting the branch mid-run made the HACS action's lookup
+of the head ref return Not Found. The visible symptom was a red cross on a run
+that no longer mattered; the real problem was that the merge had not waited for
+anything and would have gone through had the run been genuinely failing.
+
+Three rules make the last of those safe to run without watching:
 
 - **It never pushes to the default branch.** Every change arrives as a pull
   request, because a published integration accrues commits the factory never
