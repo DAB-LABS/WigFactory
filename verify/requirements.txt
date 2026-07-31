@@ -1,18 +1,22 @@
 # Dependencies for the self-verification gate.
-#
-# infrared-protocols supplies the upstream command classes. HAIR's decoder
-# registry prefers upstream wherever upstream ships a decoder and falls back
-# to HAIR's own decoders otherwise, so without this the gate quietly runs on
-# a smaller protocol set. NEC in particular has no local polyfill.
-#
-# Match the version Home Assistant core pins, which is in
-# reference/home-assistant-core/homeassistant/components/infrared/manifest.json.
-# The floor below is what core pinned when this file was written. Verifying
-# against a library older than the one the integration will run on is the
-# kind of gap this whole gate exists to close.
-infrared-protocols>=8.2.1
 
 # cryptography verifies ed25519 fitting signatures. Without it a signed
 # fitting cannot be checked, and the gate reports invalid rather than
-# vouching blind, which fails the run.
+# vouching blind, which fails the run. This one is not optional.
 cryptography>=42.0.0
+
+# infrared-protocols supplies the upstream command classes. HAIR's decoder
+# registry prefers upstream wherever upstream ships a decoder and falls back
+# to HAIR's own decoders otherwise, so without this the gate runs on a
+# smaller protocol set. NEC in particular has no local polyfill.
+#
+# Match the version Home Assistant core pins, which is in
+# reference/home-assistant-core/homeassistant/components/infrared/manifest.json.
+#
+# THE MARKER IS LOAD BEARING. infrared-protocols 8.2.1 requires Python
+# 3.14.2 or newer, which is why Home Assistant runs 3.14. Without the marker
+# this line is unsatisfiable on 3.12 and 3.13, and because pip resolves a
+# requirements file as one transaction, an unsatisfiable line takes
+# cryptography down with it. The result was a venv with no signature
+# verification at all, on a floor setup.sh advertises as supported.
+infrared-protocols>=8.2.1; python_version >= "3.14"
