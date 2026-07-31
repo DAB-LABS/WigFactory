@@ -13,10 +13,23 @@ cryptography>=42.0.0
 # Match the version Home Assistant core pins, which is in
 # reference/home-assistant-core/homeassistant/components/infrared/manifest.json.
 #
-# THE MARKER IS LOAD BEARING. infrared-protocols 8.2.1 requires Python
-# 3.14.2 or newer, which is why Home Assistant runs 3.14. Without the marker
-# this line is unsatisfiable on 3.12 and 3.13, and because pip resolves a
-# requirements file as one transaction, an unsatisfiable line takes
-# cryptography down with it. The result was a venv with no signature
+# THE MARKER IS LOAD BEARING. infrared-protocols 8.2.1 declares
+# Requires-Python >=3.14.2, which is why Home Assistant runs 3.14. Without
+# the marker this line is unsatisfiable on 3.12 and 3.13, and because pip
+# resolves a requirements file as one transaction, an unsatisfiable line
+# takes cryptography down with it. The result was a venv with no signature
 # verification at all, on a floor setup.sh advertises as supported.
+#
+# That declaration is metadata rather than a demonstrated incompatibility.
+# Tested 2026-07-31 on 3.13 with --ignore-requires-python: all nine command
+# modules import, all four decoders resolve, and NEC round-trips a real
+# frame. So overriding it works today.
+#
+# The marker stays anyway, and the recommendation is to run 3.14 rather than
+# override. This library is the gate's independent witness, and Home
+# Assistant runs it on 3.14. A witness running on a different interpreter
+# from the one users get is the same class of gap as a witness running an
+# older version, which the paragraph above already refuses to accept.
+# Four decoders working is not the same as every path working, and the
+# maintainers declared that floor for a reason nobody here has read.
 infrared-protocols>=8.2.1; python_version >= "3.14"
