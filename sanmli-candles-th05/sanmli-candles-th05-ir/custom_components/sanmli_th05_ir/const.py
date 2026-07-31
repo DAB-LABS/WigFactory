@@ -21,7 +21,7 @@ CONF_SEND_COUNT = "send_count"
 # is deliberate: core does not read repeat_count on the Broadlink emitter path
 # (pulses_to_data never sets the repeat byte), so a frame count set there would
 # silently do nothing on common hardware.
-DEFAULT_SEND_COUNT = 3
+DEFAULT_SEND_COUNT = 4
 MIN_SEND_COUNT = 1
 MAX_SEND_COUNT = 10
 SEND_REPEAT_GAP = 0.1
