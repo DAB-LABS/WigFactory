@@ -14,7 +14,7 @@ cryptography>=42.0.0
 # reference/home-assistant-core/homeassistant/components/infrared/manifest.json.
 #
 # THE MARKER IS LOAD BEARING. infrared-protocols 8.2.1 declares
-# Requires-Python >=3.14.2, which is why Home Assistant runs 3.14. Without
+# Requires-Python >=3.14, which is why Home Assistant runs 3.14. Without
 # the marker this line is unsatisfiable on 3.12 and 3.13, and because pip
 # resolves a requirements file as one transaction, an unsatisfiable line
 # takes cryptography down with it. The result was a venv with no signature
