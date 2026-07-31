@@ -644,8 +644,8 @@ fixed at the source and never here.
 **Then publish, per chosen wig.**
 
 ```bash
-publish/publish_integration.py --wig <slug> --integration <path>
-publish/publish_integration.py --wig <slug> --integration <path> --publish
+.venv/bin/python publish/publish_integration.py --wig <slug> --integration <path>
+.venv/bin/python publish/publish_integration.py --wig <slug> --integration <path> --publish
 ```
 
 Without `--publish` it prints what it would create and touches nothing. The
@@ -679,9 +679,9 @@ refitted, combed or repaired; the send count moves; the stamp goes stale. That
 happens far more often than a first publish, so it is automated too:
 
 ```bash
-publish/update_integration.py --wig <slug> --integration <path>
-publish/update_integration.py --wig <slug> --integration <path> --push
-publish/update_integration.py --wig <slug> --integration <path> --push --merge
+.venv/bin/python publish/update_integration.py --wig <slug> --integration <path>
+.venv/bin/python publish/update_integration.py --wig <slug> --integration <path> --push
+.venv/bin/python publish/update_integration.py --wig <slug> --integration <path> --push --merge
 ```
 
 Dry run, then a pull request, then a pull request that merges itself and cuts
@@ -698,6 +698,12 @@ It also refuses to ship a change without a version bump. Home Assistant shows
 the manifest version to users and HACS tracks the release tag, so a change
 that moves neither means somebody's install quietly stops matching what it
 says it is.
+
+**Always invoke through `.venv/bin/python`.** These scripts run the gate in
+process, and the gate needs what `verify/requirements.txt` installs. They are
+not marked executable on purpose: a shebang cannot portably point at a
+relative virtual environment, so a directly executed script would find the
+system interpreter and fail somewhere less obvious than the first line.
 
 **Credentials.** Use `gh` when it is present and authenticated, so the
 credential stays in the OS keychain and nothing here ever handles a secret.
