@@ -674,6 +674,31 @@ script does all of it:
    about to be created. After the push it is a normal repository with a
    normal pull request process, and the factory does not reach back in.
 
+**Updating a published integration is a different command.** A wig gets
+refitted, combed or repaired; the send count moves; the stamp goes stale. That
+happens far more often than a first publish, so it is automated too:
+
+```bash
+publish/update_integration.py --wig <slug> --integration <path>
+publish/update_integration.py --wig <slug> --integration <path> --push
+publish/update_integration.py --wig <slug> --integration <path> --push --merge
+```
+
+Dry run, then a pull request, then a pull request that merges itself and cuts
+the release. Two rules make the last of those safe to run without watching:
+
+- **It never pushes to the default branch.** Every change arrives as a pull
+  request, because a published integration accrues commits the factory never
+  saw and that is where the collision becomes visible.
+- **It never deletes.** Files the factory generates are overwritten; files
+  that exist only in the published repository are left alone and reported.
+  Somebody adding a CONTRIBUTING should not lose it to a stamp refresh.
+
+It also refuses to ship a change without a version bump. Home Assistant shows
+the manifest version to users and HACS tracks the release tag, so a change
+that moves neither means somebody's install quietly stops matching what it
+says it is.
+
 **Credentials.** Use `gh` when it is present and authenticated, so the
 credential stays in the OS keychain and nothing here ever handles a secret.
 Fall back to a token from the environment when it is not. Never read a
