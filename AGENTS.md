@@ -79,7 +79,12 @@ guess and it will not silently skip the gate.
 8.2.1 requires Python 3.14.2 or newer, which is why Home Assistant runs 3.14.
 Below that it cannot be installed, so a 3.12 or 3.13 environment runs the
 gate on HAIR's own decoders alone: workable, and a smaller protocol set, with
-no local polyfill for NEC. `setup.sh` says which set you have. The
+no local polyfill for NEC, and none for GE air conditioners either: those
+are the only two protocols in HAIR's registry with no local fallback, so
+without upstream the registry drops them entirely and the gate refuses those
+wigs as undecodable. NEC is the most common consumer protocol there is, so
+this matters the moment a television wig arrives. `setup.sh` says which set
+you have. The
 requirement carries an environment marker so pip skips it cleanly rather
 than failing, because a requirements file resolves as one transaction and an
 unsatisfiable line otherwise takes `cryptography` down with it, leaving a
