@@ -239,6 +239,61 @@ class GitHub:
             raise Refusal(f"could not open the pull request ({status}): {out}")
         return json.loads(out).get("html_url", "")
 
+    def wait_for_checks(
+        self, repo: str, branch: str, timeout: int = 600
+    ) -> tuple[bool, str]:
+        """Block until every check on ``branch`` finishes. True if all passed.
+
+        Merging without this was merging blind: the first automated update
+        merged its own pull request about twenty seconds into a forty-nine
+        second validation run, and would have done so had the run been
+        failing. Deleting the branch out from under a run that was still
+        asking GitHub about the ref is the same bug wearing a different hat.
+        """
+        if self.via_gh:
+            # gh blocks until every check finishes and exits non-zero if any
+            # of them failed, which is exactly the question being asked.
+            code, out = self._run(
+                ["gh", "pr", "checks", branch, "--repo", f"{OWNER}/{repo}",
+                 "--watch", "--fail-fast"]
+            )
+            if code == 0:
+                return True, "every check passed"
+            tail = " ".join(out.split())[-200:]
+            return False, f"gh reports a failing or pending check: {tail}"
+
+        import time
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            status, body = self._api(
+                "GET",
+                f"/repos/{OWNER}/{repo}/actions/runs"
+                f"?branch={branch}&per_page=20",
+            )
+            if status != 200:
+                # Not knowing must never read as fine. That is the whole
+                # reason this function exists.
+                return False, (
+                    f"could not read check status ({status}), so whether the "
+                    f"checks passed is unknown"
+                )
+            runs = json.loads(body).get("workflow_runs") or []
+            if not runs:
+                time.sleep(10)
+                continue
+            pending = [r for r in runs if r.get("status") != "completed"]
+            if pending:
+                time.sleep(10)
+                continue
+            failed = [
+                r["name"] for r in runs if r.get("conclusion") not in ("success", "skipped", "neutral")
+            ]
+            if failed:
+                return False, f"{', '.join(sorted(set(failed)))} did not pass"
+            return True, f"{len(runs)} check(s) passed"
+        return False, f"checks did not finish within {timeout}s"
+
     def merge_pr(self, repo: str, url_or_branch: str) -> None:
         if self.dry_run:
             return
