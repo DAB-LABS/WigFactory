@@ -110,7 +110,25 @@ fi
 echo "Using $($PY --version) for the verification environment."
 "$PY" -m venv "$REPO_ROOT/.venv"
 "$REPO_ROOT/.venv/bin/pip" install --quiet --upgrade pip
-"$REPO_ROOT/.venv/bin/pip" install --quiet -r "$REPO_ROOT/verify/requirements.txt"
+if ! "$REPO_ROOT/.venv/bin/pip" install --quiet -r "$REPO_ROOT/verify/requirements.txt"; then
+    echo
+    echo "The verification dependencies did not install. The gate needs"
+    echo "cryptography to check fitting signatures and reports invalid"
+    echo "without it, so do not run a build until this is fixed."
+    exit 1
+fi
+
+# Say which protocol set the gate will have. Upstream ships decoders for a
+# few protocols and encoders for many; where it decodes, HAIR prefers it.
+# Where it is absent the gate falls back to HAIR's own decoders, which is
+# workable and narrower, and worth knowing before a run rather than after.
+if "$REPO_ROOT/.venv/bin/python" -c 'import infrared_protocols' 2>/dev/null; then
+    echo "Upstream infrared-protocols is present."
+else
+    echo "Upstream infrared-protocols is NOT present: it needs Python 3.14.2"
+    echo "or newer and this environment is $($PY --version | cut -d' ' -f2)."
+    echo "The gate falls back to HAIR's own decoders, which covers less."
+fi
 
 echo
 echo "Ready. Verify a wig with:"
