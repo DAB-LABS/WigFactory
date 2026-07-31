@@ -584,6 +584,8 @@ def run_input_gate(
     if matrix is not None:
         check_matrix(hair, wig, matrix, report)
 
+    check_comb(wig, report)
+
     _check_fittings(hair, wig, report, require_handles, exemption)
     return wig
 
@@ -909,6 +911,108 @@ def _check_send_times(
             f"room, and one send-count setting cannot express it. Generate a "
             f"per code repeat for those, or say in the README that they are "
             f"sent once."
+        )
+
+
+# ---------------------------------------------------------------------------
+# The comb receipt
+# ---------------------------------------------------------------------------
+
+
+def check_comb(wig: Any, report: Report) -> None:
+    """Read what HAIR's comb found, and treat it as provenance not proof.
+
+    HAIR 0.9.1 checks a wig's codes against each other on import and leaves a
+    receipt. It answers a question a fitting cannot: a fitting attests the
+    dimension checklist, which on a matrix wig is nine rows out of hundreds,
+    so a cell sending its neighbour's code sits under a complete signed
+    fitting and nothing in the paperwork disagrees.
+
+    **The gate does not trust it.** The receipt is unsigned and sits outside
+    the canonical hash, so anybody can paste a clean one onto a broken wig.
+    Every check here runs regardless, which makes forging it pointless, which
+    is the property worth having. What the receipt is good for is provenance:
+    who checked these codes, when, and with what result.
+
+    So this reports and never refuses. Where the factory and the comb
+    disagree, the disagreement is the interesting part and gets said out loud
+    rather than resolved.
+    """
+    comb = wig.extra.get("comb")
+    if comb is None:
+        report.note(
+            "no comb receipt. Nobody has checked this wig's codes against "
+            "each other, which is not the same as their being clean. HAIR "
+            "0.9.1 and newer records one on import."
+        )
+        return
+    if not isinstance(comb, dict):
+        report.note("the comb receipt is not an object, so it says nothing")
+        return
+
+    suspects = comb.get("suspects")
+    dated = comb.get("date")
+    when = f" on {dated}" if dated else ""
+    if not isinstance(suspects, int):
+        report.note(f"the comb receipt{when} carries no readable suspect count")
+        return
+
+    counts = comb.get("counts") if isinstance(comb.get("counts"), dict) else {}
+    report.facts["comb"] = {
+        "date": dated,
+        "version": comb.get("version"),
+        "suspects": suspects,
+        "counts": dict(counts),
+    }
+
+    # What this run found on its own, so the two can be compared rather than
+    # one being taken on faith.
+    ours = len(report.facts.get("lattice_defects") or []) + len(
+        (report.facts.get("frame_shape") or {}).get("malformed") or []
+    ) + len(report.facts.get("missing_cells") or [])
+
+    if suspects == 0:
+        report.ok(f"combed{when}, no suspects recorded")
+        if ours:
+            report.note(
+                f"but this run found {ours} problem(s) the receipt does not "
+                f"mention. Either the comb predates the current codes, or its "
+                f"checks and these ones do not cover the same ground. The "
+                f"receipt does not bind to a content hash, so it cannot say "
+                f"which."
+            )
+        return
+
+    detail = "; ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
+    report.note(
+        f"the comb found {suspects} suspect(s){when}"
+        + (f" ({detail})" if detail else "")
+        + ". Read the receipt: combing sees things a fitting cannot, because "
+        "a checklist samples dimensions rather than cells."
+    )
+
+    findings = comb.get("findings")
+    neighbours = [
+        f
+        for f in (findings if isinstance(findings, list) else [])
+        if isinstance(f, dict) and f.get("check") == "duplicated-neighbour"
+    ]
+    if neighbours:
+        rows = [
+            " and ".join(f["keys"]) if isinstance(f.get("keys"), list) else "?"
+            for f in neighbours[:6]
+        ]
+        more = f"; and {len(neighbours) - 6} more" if len(neighbours) > 6 else ""
+        report.note(
+            f"{len(neighbours)} of those send a neighbour's code: "
+            f"{'; '.join(rows)}{more}. That is the class that looks like it "
+            f"worked while landing on the wrong state."
+        )
+    truncated = comb.get("truncated")
+    if isinstance(truncated, int) and truncated > 0:
+        report.note(
+            f"the receipt lists its findings up to a cap and omits "
+            f"{truncated} more. The counts describe the whole result."
         )
 
 
@@ -1576,6 +1680,15 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
                 f"  accounts:      {report.facts.get('promotion_handles', 0)} "
                 f"of {PROMOTION_HANDLES} for promotion"
             )
+            comb = report.facts.get("comb")
+            if comb:
+                print(
+                    f"  combed:        {comb.get('date') or 'undated'}, "
+                    f"{comb.get('suspects')} suspect(s) "
+                    f"(receipt, not independently verified)"
+                )
+            else:
+                print("  combed:        no receipt")
             send_times = report.facts.get("send_times") or {}
             if send_times.get("derived"):
                 basis = (
