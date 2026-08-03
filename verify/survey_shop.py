@@ -60,6 +60,12 @@ _UNUSABLE_MARKERS = (
     "no complete fitting survived",
     "cannot read",
     "has neither signals nor",
+    # hair-wig/3. A bundle naming another wig_id, or a block that is neither
+    # a claims bundle nor a pre-claims fitting, means the attestation cannot
+    # be read at all. Unusable rather than defective: the codes may be
+    # perfect and there is still nothing here vouching for them.
+    "attestation about a different file",
+    "neither a claims bundle nor",
 )
 
 
@@ -124,6 +130,12 @@ def survey(
                 ),
                 "protocol": report.facts.get("protocol"),
                 "accounts": report.facts.get("promotion_handles", 0),
+                # Pooled row coverage (hair-wig/3). Distinct from the account
+                # count and worth seeing beside it: coverage can reach the
+                # full row count while nobody at all has proven the whole
+                # wig, which is the difference between "everything has been
+                # tried" and "somebody can vouch for it".
+                "coverage": report.facts.get("coverage"),
                 "waived": waiver is not None and bucket != "FITTINGS",
                 "bucket": bucket,
                 "why": why,
@@ -148,10 +160,14 @@ def print_survey(rows: list[dict[str, Any]], provenance: dict[str, str] | None) 
             shape = r["shape"] or "?"
             size = f"{r['rows']} {'cells' if shape == 'matrix' else 'signals'}"
             waived = "  [waived]" if r["waived"] else ""
+            cov = r.get("coverage") or {}
+            covered = (
+                f"  {cov['covered']}/{cov['total']} rows" if cov else ""
+            )
             print(
                 f"   {r['slug']:34} {str(r['brand'] or '?'):12} "
                 f"{size:12} {str(r.get('protocol') or ''):10} "
-                f"{r['accounts']}/{PROMOTION_HANDLES}{waived}"
+                f"{r['accounts']}/{PROMOTION_HANDLES}{covered}{waived}"
             )
             for line in r["why"][:3]:
                 print(f"        {line[:150]}")
