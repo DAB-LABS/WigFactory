@@ -1458,7 +1458,11 @@ def _check_frame_shape(hair: Hair, cells: list[Any], report: Report) -> None:
         else:
             deltas = [
                 b - a
-                for a, b in zip(normal, body + (0,) * (len(normal) - len(body)))
+                for a, b in zip(
+                    normal,
+                    body + (0,) * (len(normal) - len(body)),
+                    strict=True,
+                )
             ]
             noted = ", ".join(
                 f"frame {i} {d:+d}" for i, d in enumerate(deltas) if d
