@@ -57,6 +57,7 @@ from _common import (  # noqa: E402
     run_the_gate,
 )
 
+
 def push_initial_commit(
     integration: Path, repo: str, message: str, *, dry_run: bool
 ) -> None:
