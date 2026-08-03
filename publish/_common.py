@@ -380,6 +380,67 @@ def describe(facts: dict[str, Any]) -> tuple[str, list[str]]:
     return description[:350], topics[:20]
 
 
+#: Gate facts a publish or update record cites, in the order they read best.
+#: Kept HERE rather than spelled out at each call site, because the two tools
+#: drifted the moment the gate's fact names changed: hair-wig/3 replaced
+#: ``send_times`` with ``recipe``, and update_integration went on asking for
+#: the old key. A missing key in an f-string does not raise, it prints a
+#: default, so both the commit message and the pull request body would have
+#: gone on saying "proven threshold unrecorded" about a wig that states one.
+#: One definition, one place to fix, and provenance_lines refuses on a key it
+#: does not recognize rather than printing a shrug.
+PROVENANCE_KEYS = (
+    "wig_id", "content_hash", "shop_commit", "default_send_count",
+    "recipe", "coverage", "promotion_handles", "hair_version",
+)
+
+
+def provenance_lines(facts: dict[str, Any]) -> list[str]:
+    """What a published artifact says about where it came from.
+
+    Every line is derived from a gate fact rather than restated by hand. A
+    line whose fact is genuinely absent says so in words: "not stated" is a
+    true sentence about a wig, where a silently defaulted number is not.
+    """
+    recipe = facts.get("recipe") or {}
+    coverage = facts.get("coverage") or {}
+
+    send = recipe.get("derived")
+    dittos = recipe.get("dittos") or {}
+    bypass = recipe.get("bypass") or []
+    if send is None:
+        recipe_line = "Transmit recipe not stated by the wig"
+    else:
+        parts = [f"send count {send}"]
+        if dittos:
+            counts = sorted({int(v) for v in dittos.values()})
+            shape = counts[0] if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
+            parts.append(f"ditto {shape} on {len(dittos)} row(s)")
+        if bypass:
+            parts.append(f"{len(bypass)} row(s) sent raw")
+        recipe_line = "Transmit recipe: " + ", ".join(parts)
+
+    lines = [
+        f"Wig id {facts.get('wig_id') or 'none'}",
+        f"Content hash {facts.get('content_hash') or 'unknown'}",
+        f"Wig Shop {str(facts.get('shop_commit') or 'unknown')[:7]}",
+        recipe_line,
+        f"Shipped send count {facts.get('default_send_count', 'not set')}",
+    ]
+    if coverage:
+        lines.append(
+            f"Rows proven {coverage.get('covered')} of {coverage.get('total')}, "
+            f"pooled across every fitter"
+        )
+    lines.append(
+        f"Distinct accounts {facts.get('promotion_handles', 0)} of "
+        f"{PROMOTION_HANDLES}"
+        + (", waived by a written exemption" if facts.get("exemption") else "")
+    )
+    lines.append(f"Verified against HAIR {facts.get('hair_version') or 'unknown'}")
+    return lines
+
+
 def manifest_of(integration: Path) -> dict[str, Any]:
     candidates = sorted(integration.glob("custom_components/*/manifest.json"))
     if not candidates:
