@@ -127,22 +127,28 @@ Run the gate before you look at anything else.
 It enforces the hard requirements, and all of them are refusals, not
 warnings:
 
-1. **It parses** as `hair-wig/1` or `hair-wig/2` through HAIR's own
-   `wig_format.parse_wig`. Not a lookalike parser you wrote. The same code
-   the user's install runs on import.
-2. **It carries at least one complete fitting.** Complete means `confirmed`
-   covers every fitting row and `failed` is empty. A wig with no fitting is
-   a spreadsheet, and this factory does not take spreadsheets.
-3. **Every fitting's `content_hash` matches** the wig's recomputed
-   canonical hash. A stale hash means the codes moved after somebody proved
-   them, and the proof no longer covers what is in the file.
-4. **Signatures verify** where a fitting carries `key` and `sig`. A fitting
-   that claims a signature and fails it is a hard stop. An unsigned fitting
+1. **It parses** through HAIR's own `wig_format.parse_wig`. Not a lookalike
+   parser you wrote. The same code the user's install runs on import.
+2. **It carries at least one complete claims bundle.** Complete means one
+   person claimed every row worked. A wig with no fitting is a spreadsheet,
+   and this factory does not take spreadsheets.
+3. **Every bundle names this wig.** Its `wig_id` has to match the wig's. A
+   bundle naming another wig is not a stale attestation, it is somebody
+   else's, and row digests can still line up by coincidence on a shared code
+   set.
+4. **Signatures verify** where a bundle carries `key` and `sig`. A bundle
+   that claims a signature and fails it is a hard stop. An unsigned bundle
    passes with a note.
 5. **Every signal decodes, and to one protocol family.** Mixed protocol
    wigs are out of scope: one wig, one codec. A signal that will not decode
    at all is out of scope too, because there is nothing to generate from
    raw replay.
+6. **No row asks for a waveform that cannot exist.** Setting both
+   `bypass_protocol` and a ditto count is a contradiction: only the encoder
+   renders a repeat frame, so a bypassed row asking for one describes
+   something nothing can produce.
+7. **The integration reproduces the transmit recipe**, when one is being
+   checked. See section 3.2.
 
 It also **counts distinct contributors**, and this is not the same as
 counting handles. The `github` field is free text somebody typed, so one
@@ -215,28 +221,101 @@ temperature, recognising a checksum, choosing what the entity exposes. The
 tool exists so you apply that judgement to a field map rather than to 63KB
 of hex.
 
-It also reads **send times** off the fittings. A fitting made on HAIR 0.9.0 or
-later carries `send_times_used`: how many times each signal had to be
-transmitted per press before the device answered, during the session that
-proved it. Read the number the gate prints, because step 5 has to ship it.
+### The transmit recipe, and what a claim actually binds
 
-Three rules about that field, and they are all easy to get wrong:
+`hair-wig/3` (HAIR 0.9.5, the Fitting Room) changed the model under this
+factory, and the change is not cosmetic. Read this before touching anything
+that reads a fitting.
 
-- **Absent is not 1.** A fitting without it predates the field and claims
-  nothing. An explicit `1` is a real measurement: the fitter had the control
-  and one send was enough. Never treat the first as the second.
-- **Aggregate by maximum, never mean.** Send times is a threshold, not a
-  tendency. A fitter reporting 3 is saying fewer than three was unreliable
-  where they stood, so averaging `[1, 3, 3]` to 2 produces a number that
-  satisfies nobody who measured.
-- **Read the spread, not just the max.** The gate prints both. Three fittings
-  saying 1 and one saying 8 is not a device that needs eight frames, it is one
-  room with a weak blaster or a bad angle. That is a judgement call, so make
-  it deliberately rather than letting the max make it for you.
+**Attestation moved from the file to the row.** There used to be one
+`content_hash` covering the whole signals array, and a fitting bound to it: a
+match meant every signal was proven, a mismatch meant none were. Now each row
+has a digest and a claim covers exactly the rows it names. Editing one code
+orphans the claims about that code and leaves the rest standing.
 
-Record what the gate printed. The content hash, the shop commit, the fitting
-handles and dates, the HAIR version and the send times go into the generated
-README in step 6, and you cannot reconstruct them later.
+**The digest is contract. Reproduce it, never reinvent it.**
+
+```
+row_digest = sha256(normalized_pronto + "|d<ditto_count>" + "|b<0|1>")[:16]
+```
+
+`normalized_pronto` is HAIR's validator normalization then lowercased hex.
+The factory calls `wig_format.row_digest`; it does not compute this itself,
+and `verify/test_recipe.py` fails if `verify_wig.py` ever imports `hashlib`,
+because a second implementation of a published contract is how the contract
+forks. Two things are deliberately OUT of the digest and must never be added:
+
+- **The alias.** Names are metadata and renames are free. A claim has to
+  survive one.
+- **The send count.** How many times to press depends on the room, not the
+  device. Two people proving the same codes at three sends and five sends are
+  proving the same thing.
+
+**The recipe lives on the signal now, not on the fitting.** Three fields:
+
+| Field | Meaning | In the digest |
+|---|---|---|
+| `send_count` | send the whole blob again, after a pause | no |
+| `ditto_count` | repeat frames the encoder appends inside one transmission | yes |
+| `bypass_protocol` | skip the re-encode, put the raw blob on the air | yes |
+
+`send_times_used` is gone. So is aggregating it by maximum across fitters:
+there is nothing to aggregate, because the wig states the answer. If you find
+a doc that still describes the old field, the doc is stale.
+
+**The discriminator is the shape, never the version stamp.** A fitting with
+`content_hash` is pre-claims; one with `wig_id` and `rows` is a claims
+bundle. This matters because HAIR's own branch wrote `hair-wig/3` files
+carrying old-shape fittings before the claims model landed, so trusting the
+major would let those through into a model with no reader for them. Use
+`wig_format.is_legacy_fitting` and `is_claims_bundle`. A matrix bundle names
+its lattice binding `cells_hash` and never `content_hash`, precisely so the
+test stays a single unambiguous question.
+
+**A pre-claims fitting no longer counts toward anything.** It cannot: it says
+nothing about which rows anybody walked, so counting it would mean inventing
+evidence. The gate names it and moves on. Re-attesting in the closet on 0.9.5
+brings it back.
+
+**Coverage and the promotion bar answer different questions.** Coverage is
+how many rows anybody has proven, pooled. The bar is how many distinct people
+have proven ALL of them. Coverage can be 12 of 12 while nobody at all can
+vouch for the wig, because three people each proved a different third. The
+gate prints both; do not substitute one for the other.
+
+### 3.2 The integration has to reproduce the recipe
+
+The forward and reverse checks prove the generated encoder puts the right
+IDENTITY on the air. They cannot prove it puts the right WAVEFORM on the air,
+because identity is what survives decoding and the recipe is what happens
+either side of it.
+
+So a generated codebook declares `WIG_RECIPE` beside `WIG_ALIASES`, mapping
+the wig's alias verbatim to `(send_count, ditto_count, bypass_protocol)`, and
+the gate compares it against the wig value by value. It is optional only
+while every row is plain, meaning a send count and nothing else, because
+`DEFAULT_SEND_COUNT` already covers that case on its own. The moment one row
+asks for a ditto or a bypass, the map is mandatory and a missing one is a
+refusal.
+
+**Refusing is the point.** Until a generator can express a ditto, the honest
+outcome for a wig that needs one is a refusal naming the rows, not a
+published integration that rounds the waveform off and inherits somebody's
+signature while doing it.
+
+Two repeats are at work and they are not interchangeable. The ditto is
+rendered by the encoder inside one transmission at the protocol's own timing;
+it is part of the waveform, it is in the digest, and it is not tunable. The
+send count sends that whole transmission again after a pause; it is the
+user's to change and sits outside the digest on purpose. An integration that
+implements one and calls it the other is wrong in a way no codec check will
+catch. Verified against upstream on 2026-08-03: the candle's vendored RC-5
+encoder at `repeat_count=1` is byte-identical to `infrared-protocols`
+8.2.1 (47 edges, 138003us, an 89997us inter-frame gap).
+
+Record what the gate printed. The wig id, content hash, shop commit, fitter
+handles and dates, HAIR version, send count and pooled coverage go into the
+generated README in step 6, and you cannot reconstruct them later.
 
 **If a wig fails this gate, stop and report why.** Do not repair the wig.
 Corrections are the fitter's job, in HAIR, with a fresh fitting. In
@@ -389,30 +468,34 @@ separate implementation from the encoder.
 Every codebook entry traces to exactly one wig alias. A generated integration
 that quietly dropped three buttons passes every other check.
 
-**Send count against the evidence.** `DEFAULT_SEND_COUNT` in the generated
-`const.py`, read out of the file rather than imported, against the maximum
-`send_times_used` across the complete fittings. Below the proven threshold is a
-refusal. Above it is allowed and noted, since more frames cost airtime and not
-correctness. This one check is not about the codec at all: a codec can be
-perfectly right and the integration still look broken, because the frames never
-arrived.
+**Send count against the wig.** `DEFAULT_SEND_COUNT` in the generated
+`const.py`, read out of the file rather than imported, against the highest
+`send_count` the wig states. Below it is a refusal. Above it is allowed and
+noted, since more frames cost airtime and not correctness. This check is not
+about the codec at all: a codec can be perfectly right and the integration
+still look broken, because the frames never arrived.
 
-Where the HAIR checkout is 0.9.0 or newer the gate calls HAIR's own
-`fitting_send_times_max` rather than aggregating itself. HAIR's docstring calls
-that function the single aggregation point for send times, shared with ADOPT
-DEVICE and the shop index, and two implementations of one rule is how the rule
-drifts. The factory keeps a fallback reader for older checkouts, kept in step
-with HAIR's the same way `github_key` is kept in step with the shop's. If you
-touch either reader, re-run the vectors:
+**Recipe conformance.** `WIG_RECIPE` in the generated `codes.py` against the
+wig, row by row. Mandatory the moment any row asks for a ditto or a bypass,
+optional while every row is plain. Section 3.2 has the reasoning; the short
+version is that the digest a fitter signed covers the ditto count and the
+bypass flag, so an integration that drops either one ships a waveform nobody
+attested while every codec check still reads green.
+
+If you touch the recipe reader or anything near the digest, re-run the
+vectors:
 
 ```bash
-.venv/bin/python verify/test_send_times.py
+.venv/bin/python verify/test_recipe.py
 ```
 
-It compares the factory's reader against HAIR's on every shape the field has
-been seen to carry, and refuses if the two disagree by so much as one value. A
-fallback that drifts from the thing it falls back to is worse than no fallback,
-because it fails quietly and in the direction nobody checks.
+It pins the published digest layout against hand-computed vectors, proves
+both exclusions by demonstration (a rename and a send-count change must not
+move a digest, a ditto and a bypass must), checks the reader's clamping, and
+fails if `verify_wig.py` has grown a local `hashlib` import. That last one is
+the real point: the factory calls HAIR's `row_digest` and must keep calling
+it, because a second implementation of a published contract does not fail
+loudly, it just quietly decides valid attestations do not match.
 
 **Any mismatch fails the run.** Do not adjust the gate to accommodate the
 generated code. Fix the generated code.
@@ -483,37 +566,37 @@ indexing so it never raises on malformed input.
 flipped after each send in which at least one emitter accepted the command.
 Not per entity, not per button.
 
-**Frames per press comes from the fittings, not from you.** Real remotes do
-not send one frame. RC-5 re-sends the same code every 114ms for as long as the
-key is held, so a physical press is three or four frames, and a battery
-powered device that duty cycles its receiver can sleep straight through a
-single frame. The symptom is a button that works on the first press sometimes
-and needs three other times, with no pattern, on a codebook that is completely
-correct. The gate cannot see it, because encoding and decoding are both fine.
-So:
+**Frames per press comes from the wig, not from you.** Real remotes do not
+send one frame. RC-5 re-sends the same code every 114ms for as long as the key
+is held, so a physical press is three or four frames, and a battery powered
+device that duty cycles its receiver can sleep straight through a single
+frame. The symptom is a button that works on the first press sometimes and
+needs three other times, with no pattern, on a codebook that is completely
+correct. The codec checks cannot see it, because encoding and decoding are
+both fine. So:
 
 - `const.py` carries `DEFAULT_SEND_COUNT`, `MIN_SEND_COUNT = 1`,
   `MAX_SEND_COUNT = 10` and a gap between frames of about 100ms.
-- `DEFAULT_SEND_COUNT` is the **maximum `send_times_used` across the complete
-  fittings**, which is the number the gate prints. Not a number you chose. The
-  gate refuses a default below the proven threshold, because shipping under it
-  reproduces a fault somebody already found and wrote down.
+- `DEFAULT_SEND_COUNT` is the **highest `send_count` the wig states**, which
+  is the number the gate prints. Not a number you chose. The gate refuses a
+  default below it, because shipping under it reproduces a fault somebody
+  already found and wrote down.
 - All the frames in one press share one RC-5 toggle value, and the toggle
   advances once, after the last of them. A press is one press. Advancing per
   frame tells the device it was pressed three times, which is exactly what
   toggle exists to distinguish.
-- Expose it in the options flow. Send times measures a room, and the next
-  person's room is not this one.
-- **When no fitting carries the field**, the gate says so and stops short of
-  guessing. Ask the fitter how many sends the device actually needed, use that,
-  and say in the README that the number came from the fitter rather than from a
-  fitting. Do not silently ship 1: absent is not a measurement of 1, and a
-  default nobody measured is the kind of thing that reads as a broken
-  integration.
-- A wig signal carrying its own `send_count` above 1 is a **different claim**.
-  That is a property of the code, where send times is a property of the room. A
-  single setting cannot express a per code repeat; generate one for that code
-  or say plainly in the README that it is sent once.
+- Expose it in the options flow. A send count is about a room, and the next
+  person's room is not this one. This is the ONLY one of the three recipe
+  fields that is the user's to change, which is exactly why it is the one
+  left out of the row digest.
+- **The ditto is not this.** `ditto_count` is rendered by the encoder inside
+  a single transmission, it is in the digest, and it is not tunable. Carry it
+  into the command's `repeat_count` and declare it in `WIG_RECIPE`. An
+  integration that implements a ditto as an extra send count, or the reverse,
+  is wrong in a way no codec check will catch.
+- **When rows disagree** on send count, a single knob cannot express it. Ship
+  the highest, and say in the README which rows wanted less. The gate prints
+  the spread.
 
 **Requirements are PyPI specifiers only.** Never a VCS URL: hassfest and
 HACS both pass it and the config flow then fails with a 500 at runtime, which
@@ -546,18 +629,22 @@ the part most likely to be done carelessly. It must carry:
   and a link to it in the shop. The commit is what lets a reader reproduce
   the fitting evidence exactly as the factory saw it, rather than having to
   trust that the count was right on the day.
-- Every fitting: handle, GitHub handle, date, HAIR version, the signing key
-  fingerprint, and the send times it recorded. Print handles as the fitter
-  typed them. They are compared canonically and displayed verbatim, never
-  rewritten.
+- Every fitter: handle, GitHub handle, date, how many rows they claimed, and
+  the signing key fingerprint. Print handles as the fitter typed them. They
+  are compared canonically and displayed verbatim, never rewritten.
 - The distinct-account count against the promotion bar, and the exemption if
   one applies.
-- **Frames per press, and where the number came from.** Say the aggregate and
-  the basis: "3, the maximum across 1 reporting fitting" or "3, from the
-  fitter, no fitting records it". Then say what to do if presses still get
-  dropped, because that is the single most likely thing to need adjusting on
-  hardware other than the bench set. A reader who knows the number is evidence
-  from somebody's room will reach for the setting instead of filing a bug.
+- **Pooled row coverage**, which is a different number from the account
+  count and is worth stating beside it. "12 of 12 rows proven, by 1 account
+  of 3" says something true that neither number says alone.
+- **Frames per press, and where the number came from.** Say it is what the
+  wig states, and say what to do if presses still get dropped, because that
+  is the single most likely thing to need adjusting on hardware other than
+  the bench set. A reader who knows the number came from somebody's bench
+  will reach for the setting instead of filing a bug.
+- **The ditto count, if any row has one**, and that it is not adjustable.
+  Somebody who finds the send-count setting will otherwise assume it is the
+  only repeat in play.
 - That the codebook was machine verified against HAIR's independent
   decoders, and in which directions.
 - Installation, the entities it creates, and what to do when a code does

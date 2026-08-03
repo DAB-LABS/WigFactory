@@ -81,6 +81,26 @@ if [ -d "$REF_DIR/WigShop/.git" ]; then
     echo "Wig Shop at $shop_sha ($shop_date), $shop_count wig(s) available."
 fi
 
+# The HAIR floor. The gate reads the hair-wig/3 claims model, which arrived in
+# HAIR 0.9.5: attestation moved from a whole-file content_hash onto per-row
+# digests, and the functions the old model used were removed rather than
+# deprecated. Said here as well as in the gate because a stale reference clone
+# is a setup problem, and finding out at publish time is finding out late.
+HAIR_MANIFEST="$REF_DIR/HAIR/custom_components/hair/manifest.json"
+if [ -f "$HAIR_MANIFEST" ]; then
+    hair_version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$HAIR_MANIFEST" | head -1)"
+    echo "HAIR at ${hair_version:-unknown}."
+    if ! grep -q "def wig_row_digests" \
+        "$REF_DIR/HAIR/custom_components/hair/wig_format.py" 2>/dev/null; then
+        echo
+        echo "  WARNING: this HAIR checkout has no wig_row_digests, so it"
+        echo "  predates the hair-wig/3 claims model (HAIR 0.9.5). The gate"
+        echo "  will refuse rather than run. If the clone just updated, this"
+        echo "  means upstream moved; otherwise check the branch."
+    fi
+fi
+
 # The verification environment.
 #
 # HAIR's decoders use 3.12+ syntax (PEP 695 type parameters), so that is the

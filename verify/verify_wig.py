@@ -19,12 +19,15 @@ directions:
   Coverage. Every wig alias has exactly one codebook entry, and every
             codebook entry traces to exactly one wig alias.
 
-There is one further check that is not about the codec at all. A fitting made
-on HAIR 0.9.0 or later records how many times each signal had to be
-transmitted before the device answered. That is a measurement of somebody's
-room, and the generated integration's shipped default must not sit below it,
-because a codec can be perfectly correct and still appear broken if the frames
-never arrive.
+There is one further pair of checks that is not about the codec at all. From
+hair-wig/3 (HAIR 0.9.5) a wig STATES the transmit recipe for every row: how
+many times to send the blob, how many repeat frames the encoder appends inside
+one transmission, and whether to bypass the encoder entirely. A claim binds
+that recipe by digest. So the generated integration has to reproduce it, and
+the gate checks both halves: the shipped send-count default must not sit below
+what the wig asks for, and any row asking for dittos or a bypass must be
+expressed by the integration rather than silently dropped. A codec can be
+perfectly correct and still put a different waveform on the air.
 
 Press state (the RC-5 toggle bit and its relatives) is excluded on both
 sides, because a toggle records which press it was and not which button.
@@ -63,16 +66,39 @@ DEFAULT_SHOP = REPO_ROOT / "reference" / "WigShop"
 # is applied silently is not an exemption.
 PROMOTION_HANDLES = 3
 
-# The bounds every reader clamps send times to, matching HAIR's
+# The bounds every reader clamps a send count to, matching HAIR's
 # const.MAX_SEND_COUNT. One frame is the floor because zero sends is not a
 # measurement, and ten is the ceiling because past that the airtime costs more
 # than the reliability buys.
-SEND_TIMES_MIN = 1
-SEND_TIMES_MAX = 10
+SEND_COUNT_MIN = 1
+SEND_COUNT_MAX = 10
 
-# The field a HAIR 0.9.0 fitting carries: how many times each signal was
-# transmitted per press while somebody proved this wig on real hardware.
-SEND_TIMES_KEY = "send_times_used"
+# HAIR's const.MAX_DITTO_COUNT. Repeat frames the encoder appends inside one
+# transmission, which is a different thing from sending the whole blob again.
+DITTO_COUNT_MAX = 20
+
+# hair-wig/3 (HAIR 0.9.5, the Fitting Room) moved the transmit recipe onto the
+# signal and attestation onto per-row digests. Before it, a fitting reported
+# ``send_times_used``: how many presses THAT FITTER'S ROOM needed, which the
+# factory aggregated by maximum across fitters. After it, the wig states what
+# the row needs and there is nothing to aggregate. The old field is gone from
+# HAIR entirely, so a reader still looking for it finds nothing and, worse,
+# reports the silence as "these fittings predate 0.9.0".
+RECIPE_MAJOR = 3
+
+# The names of the HAIR functions this gate cannot work without. Checked at
+# construction so a stale reference checkout produces one sentence telling you
+# to update it, rather than an AttributeError forty frames down. That is not
+# hypothetical: 0.9.5 removed ``wig_fitting.fitting_rows`` and every entry
+# point in this repo died on the traceback rather than refusing.
+REQUIRED_HAIR_API = {
+    "wig_format": (
+        "wig_row_digests", "signal_row_digest", "row_digest", "claims_of",
+        "coverage", "perfect_by", "parse_claims_bundle", "is_claims_bundle",
+        "is_legacy_fitting", "wig_content_hash",
+    ),
+    "wig_fitting": ("bundle_is_complete",),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +226,7 @@ def wig_slug(wig_path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Send times
+# The transmit recipe
 # ---------------------------------------------------------------------------
 
 
@@ -209,33 +235,73 @@ def _fittings(count: int) -> str:
     return f"{count} fitting" if count == 1 else f"{count} fittings"
 
 
-def read_send_times(entry: dict[str, Any]) -> int | None:
-    """Read ``send_times_used`` off one raw fitting, clamped, or None.
+@dataclass(frozen=True)
+class Recipe:
+    """What one row asks to have put on the air.
 
-    ABSENT IS NOT 1. A fitting without the field was made before HAIR 0.9.0,
-    or by a tool that does not write it, and claims nothing about how many
-    frames the device needed. An explicit ``1`` is a different statement: the
-    fitter had the control in front of them and one send was enough. Coercing
-    the first into the second would let a wig from 2026-07 silently vouch for a
-    default nobody measured, which is the exact false confidence the field was
-    added to remove.
+    The three fields HAIR's ``row_digest`` binds, minus the Pronto itself:
+    everything here changes the waveform, which is why a claim covers it. A
+    fitter who proved a row proved THIS recipe against THOSE bytes, so an
+    integration that ships different numbers is shipping something nobody
+    attested, however correct its codec is.
+    """
 
-    ``bool`` is an ``int`` subclass, so ``True`` would otherwise read as 1.
-    That is garbage arriving in a numeric field, not a measurement, so it is
-    refused rather than believed.
+    send_count: int
+    ditto_count: int
+    bypass_protocol: bool
+
+    @property
+    def plain(self) -> bool:
+        """True when this row needs nothing the old model could not express."""
+        return self.ditto_count == 0 and not self.bypass_protocol
+
+    def describe(self) -> str:
+        parts = [f"send x{self.send_count}"]
+        if self.ditto_count:
+            parts.append(f"ditto x{self.ditto_count}")
+        if self.bypass_protocol:
+            parts.append("raw (encoder bypassed)")
+        return ", ".join(parts)
+
+
+def read_recipe(signal: Any) -> Recipe:
+    """The recipe a parsed signal states, clamped.
 
     Clamped on read because a signature makes a value tamper evident, not
-    sane: a fitting can be perfectly signed and still carry 1000.
+    sane: a bundle can be perfectly signed over a row carrying 1000 sends. The
+    clamp is the factory's, applied to what it will act on; it deliberately
+    does NOT rewrite the wig, because the digest binds the stored value and
+    quietly normalizing it here would put the gate and the claim into
+    disagreement about what was proven.
 
-    Kept deliberately in step with ``_read_send_times`` in HAIR's
-    ``wig_fitting.py``. Where that module is importable the factory calls
-    HAIR's aggregate instead of this, and this becomes the fallback for a HAIR
-    checkout older than 0.9.0.
+    ``bool`` is an ``int`` subclass, so a ``True`` arriving in a numeric field
+    would otherwise read as 1. That is garbage, not a measurement.
     """
-    value = entry.get(SEND_TIMES_KEY)
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return max(SEND_TIMES_MIN, min(value, SEND_TIMES_MAX))
+
+    def whole(value: Any, low: int, high: int, fallback: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return fallback
+        return max(low, min(value, high))
+
+    return Recipe(
+        send_count=whole(
+            getattr(signal, "send_count", 1),
+            SEND_COUNT_MIN, SEND_COUNT_MAX, SEND_COUNT_MIN,
+        ),
+        # Zero is the floor and the default: no repeat frame. Unlike send
+        # count, one ditto is a real and different waveform, so there is no
+        # "absent is not 1" problem here -- absent IS zero, and hair-wig/3
+        # writes the field always rather than only when set.
+        ditto_count=whole(
+            getattr(signal, "ditto_count", 0), 0, DITTO_COUNT_MAX, 0
+        ),
+        bypass_protocol=bool(getattr(signal, "bypass_protocol", False)),
+    )
+
+
+def wig_recipes(wig: Any) -> dict[str, Recipe]:
+    """Every flat row's recipe, keyed by alias, in file order."""
+    return {signal.alias: read_recipe(signal) for signal in wig.signals}
 
 
 def read_default_send_count(component_dir: Path) -> dict[str, int]:
@@ -434,21 +500,19 @@ class Hair:
         self.fitting_signing = importlib.import_module(
             "custom_components.hair.fitting_signing"
         )
-        # Optional, and deliberately so. `wig_fitting` is where HAIR 0.9.0 put
-        # `fitting_send_times_max`, which its own docstring calls the single
-        # aggregation point for send times: ADOPT DEVICE, the factory and the
-        # shop index all call it so the rule cannot drift. The factory would
-        # rather use HAIR's answer than hold a second opinion. A HAIR checkout
-        # older than 0.9.0 simply does not have it, and an older module can
-        # also pull in a dependency the shim does not provide, so a failure to
-        # import is a fallback and never a refusal.
+        # REQUIRED from 0.9.5, where it used to be optional. `wig_fitting`
+        # owns `bundle_is_complete`, and completeness is not something the
+        # factory is entitled to a second opinion about: it is the difference
+        # between "somebody proved this" and "somebody proved most of this".
         self.wig_fitting: Any | None
         try:
             self.wig_fitting = importlib.import_module(
                 "custom_components.hair.wig_fitting"
             )
-        except BaseException:  # noqa: BLE001 - see comment above
+        except BaseException:  # noqa: BLE001 - reported by _require_api
             self.wig_fitting = None
+
+        self._require_api()
 
         # Matrix wigs. `wig_climate` owns the dimension checklist, which is
         # what a matrix fitting actually walks, and `cell_key` owns the key
@@ -462,6 +526,37 @@ class Hair:
             )
         except BaseException:  # noqa: BLE001
             self.wig_climate = None
+
+    def _require_api(self) -> None:
+        """Refuse a HAIR checkout too old to answer the questions we ask.
+
+        A missing name here is not a degraded mode, it is a different format
+        era, and guessing across one is how a gate reports a green run about
+        rules it never applied. The failure this replaces was real: HAIR 0.9.5
+        removed ``wig_fitting.fitting_rows`` and the gate died on an
+        AttributeError inside a set comprehension, which reads as a factory
+        bug rather than as "your reference clone is stale".
+        """
+        missing: list[str] = []
+        for module_name, names in REQUIRED_HAIR_API.items():
+            module = getattr(self, module_name, None)
+            if module is None:
+                missing.append(f"{module_name} (whole module)")
+                continue
+            missing += [
+                f"{module_name}.{name}"
+                for name in names
+                if not hasattr(module, name)
+            ]
+        if not missing:
+            return
+        raise SystemExit(
+            f"the HAIR checkout at {self.root} is version {self.version} and "
+            f"does not provide: {', '.join(missing)}.\n"
+            f"The factory reads the hair-wig/{RECIPE_MAJOR} claims model, "
+            f"which arrived in HAIR 0.9.5. Run ./setup.sh to refresh the "
+            f"reference clones, or pass --hair with a newer checkout."
+        )
 
     @property
     def version(self) -> str:
@@ -485,26 +580,51 @@ class Hair:
         return raw or None
 
     def content_hash(self, wig: Any) -> str:
-        """The wig's canonical hash: signals for v1, cells for a matrix."""
+        """The wig's canonical hash: signals for v1, cells for a matrix.
+
+        NO LONGER AN ATTESTATION TARGET. From hair-wig/3 nothing signs this
+        and no file carries it; it survives as the deduplication identity,
+        which is exactly what the factory still wants it for -- a stable name
+        for "the same codes" to record in a README and a commit message.
+        """
         return self.wig_format.wig_content_hash(wig)
 
-    def fitting_rows(self, wig: Any) -> list[tuple[str, str, int]]:
-        """What a fitting walks: aliases for v1, the checklist for a matrix."""
-        return self.wig_fitting.fitting_rows(wig)
+    def row_digests(self, wig: Any) -> list[str]:
+        """Every flat row's digest, in file order. Empty for a matrix wig.
+
+        THE binding target from 0.9.5 on:
+        ``sha256(normalized_pronto + "|d<ditto>" + "|b<0|1>")[:16]``. The
+        factory calls HAIR's implementation rather than reproducing the
+        layout, because two implementations of one contract is how the
+        contract forks.
+        """
+        return self.wig_format.wig_row_digests(wig)
+
+    def signal_row_digest(self, signal: Any) -> str:
+        """One flat signal's digest."""
+        return self.wig_format.signal_row_digest(signal)
+
+    def claims(self, wig: Any) -> list[Any]:
+        """Every claims bundle on a wig. Legacy fittings are skipped."""
+        return self.wig_format.claims_of(wig)
+
+    def bundle_complete(
+        self, bundle: Any, wig: Any, digests: list[str] | None = None
+    ) -> bool:
+        """Did one bundle claim everything there was to claim?"""
+        return self.wig_fitting.bundle_is_complete(bundle, wig, digests)
+
+    def covered(self, bundles: list[Any], digests: list[str]) -> set[str]:
+        """Which rows anybody claimed worked, pooled."""
+        return self.wig_format.coverage(bundles, digests)
 
     def cell_key(self, cell: Any) -> str:
         """HAIR's cell key, `cool/auto/23` shaped. Never reimplement this."""
         return self.wig_format.cell_key(cell)
 
-    def send_times_max(self, wig: Any) -> int | None:
-        """HAIR's own send-times aggregate, or None if this HAIR predates it."""
-        aggregate = getattr(self.wig_fitting, "fitting_send_times_max", None)
-        if aggregate is None:
-            return None
-        try:
-            return int(aggregate(wig))
-        except BaseException:  # noqa: BLE001 - fall back rather than refuse
-            return None
+    def cells_hash(self, matrix: Any) -> str:
+        """The lattice hash a matrix bundle pins with ``cells_hash``."""
+        return self.wig_format.cells_content_hash(matrix)
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +706,12 @@ def run_input_gate(
 
     check_comb(wig, report)
 
+    # BEFORE the fittings, and unconditionally. The recipe is a property of
+    # the wig: a row asking for a waveform nothing can produce is wrong even
+    # if every fitting on the file is broken too, and running this inside
+    # _check_fittings meant its early return swallowed the check entirely.
+    _check_recipe(hair, wig, report)
+
     _check_fittings(hair, wig, report, require_handles, exemption)
     return wig
 
@@ -611,7 +737,20 @@ def _check_fittings(
     require_handles: int | None = None,
     exemption: Exemption | None = None,
 ) -> None:
-    """Fittings must exist, be complete, bind to these codes, and verify."""
+    """Fittings must exist, cover every row, bind to this wig, and verify.
+
+    Rewritten for hair-wig/3. The old shape asked one question of the whole
+    file -- does your ``content_hash`` still match? -- and a yes covered every
+    signal at once. The claims model asks it per row, which is strictly more
+    honest: editing one code now orphans exactly the claims about that code
+    instead of invalidating everybody's whole attestation, and a partial
+    fitting can say what it actually proved rather than being discarded.
+
+    A PRE-CLAIMS FITTING NO LONGER COUNTS. It cannot: it carries a whole-file
+    hash and nothing about which rows anybody walked, so promoting one would
+    mean inventing per-row evidence nobody produced. It is reported, by name,
+    with what to do about it, and then ignored.
+    """
     fittings = wig.extra.get("fittings")
     if not isinstance(fittings, list) or not fittings:
         report.fail(
@@ -620,44 +759,103 @@ def _check_fittings(
         )
         return
 
-    # One path for both wig shapes, via HAIR's own definitions. For a signal
-    # wig the hash covers the signals and the rows are aliases; for a matrix
-    # the hash covers the cells and the rows are the dimension checklist, a
-    # deterministic 12 to 20 row walk rather than the whole lattice. Nobody
-    # fits 960 cells; everybody can fit every dimension.
-    expected_hash = hair.content_hash(wig)
-    report.facts["content_hash"] = expected_hash
+    # Recorded, not enforced. From hair-wig/3 nothing signs this and no file
+    # carries it; it is the dedup identity and a stable thing to print.
+    report.facts["content_hash"] = hair.content_hash(wig)
+    report.facts["wig_id"] = getattr(wig, "wig_id", None)
 
-    rows = {key for key, _, _ in hair.fitting_rows(wig)}
-    report.facts["fitting_row_count"] = len(rows)
+    matrix = getattr(wig, "climate", None)
+    digests = hair.row_digests(wig)
+    report.facts["fitting_row_count"] = (
+        len(matrix.cells) if matrix is not None else len(digests)
+    )
+
     complete: list[dict[str, Any]] = []
+    bundles: list[Any] = []
+    legacy: list[str] = []
 
     for index, entry in enumerate(fittings):
         label = f"fittings[{index}]"
         if not isinstance(entry, dict):
             report.fail(f"{label} is not an object")
             continue
-        handle = entry.get("handle") or "(no handle)"
-        label = f"fitting by {handle}"
+        who = str(entry.get("handle") or entry.get("github") or "(no handle)")
+        label = f"fitting by {who}"
 
-        confirmed = set(entry.get("confirmed") or [])
-        failed = list(entry.get("failed") or [])
-        missing = sorted(rows - confirmed)
-        if failed:
-            report.note(f"{label} is incomplete: {len(failed)} signal(s) failed")
+        # Shape, never the version stamp (HAIR hard rule 6). A file can be
+        # stamped /3 and still carry a pre-claims block; trusting the major
+        # would let it through into a model with no reader for it.
+        if hair.wig_format.is_legacy_fitting(entry):
+            legacy.append(who)
             continue
-        if missing:
-            report.note(
-                f"{label} is incomplete: {len(missing)} signal(s) untested"
-            )
-            continue
-
-        entry_hash = entry.get("content_hash")
-        if entry_hash != expected_hash:
+        bundle = hair.wig_format.parse_claims_bundle(entry)
+        if bundle is None:
             report.fail(
-                f"{label} binds to {entry_hash}, but these codes hash to "
-                f"{expected_hash}. The codes moved after somebody proved them."
+                f"{label} is neither a claims bundle nor a pre-claims "
+                f"fitting. A bundle carries wig_id and rows; a pre-claims "
+                f"fitting carries content_hash. This carries neither, so "
+                f"there is no way to tell what it is attesting."
             )
+            continue
+
+        # Identity first. A bundle whose wig_id names a different wig is not
+        # a stale attestation, it is somebody else's attestation, and the row
+        # digests could still line up by coincidence on a shared code set.
+        wig_id = getattr(wig, "wig_id", None)
+        if wig_id and bundle.wig_id != wig_id:
+            report.fail(
+                f"{label} claims wig_id {bundle.wig_id}, but this wig is "
+                f"{wig_id}. That is an attestation about a different file."
+            )
+            continue
+
+        if matrix is not None:
+            # A checklist samples a lattice, so the bundle has to pin the
+            # lattice it sampled. Named cells_hash and never content_hash,
+            # precisely so the legacy test above stays unambiguous.
+            expected = hair.cells_hash(matrix)
+            if bundle.cells_hash != expected:
+                report.fail(
+                    f"{label} pins lattice {bundle.cells_hash}, but these "
+                    f"cells hash to {expected}. The lattice moved after "
+                    f"somebody walked it."
+                )
+                continue
+
+        unknown = [
+            row.digest for row in bundle.rows
+            if matrix is None and row.digest not in set(digests)
+        ]
+        if unknown:
+            report.note(
+                f"{label} claims {len(unknown)} row(s) this wig no longer "
+                f"has. Orphaned by an edit, not a failure: the remaining "
+                f"claims still stand."
+            )
+
+        if not hair.bundle_complete(bundle, wig, digests or None):
+            # Against the wig's CURRENT digests. Counting the bundle's own
+            # worked rows instead reported "12 of 12 claimed as working" on a
+            # wig whose codes had been edited underneath it, which is exactly
+            # backwards: the claims are intact and the wig moved.
+            live = set(digests)
+            worked = sum(
+                1 for row in bundle.rows
+                if row.verdict == hair.wig_format.VERDICT_WORKED
+                and (matrix is not None or row.digest in live)
+            )
+            excluded = [
+                f"{row.alias_at_claim or row.digest} ({row.verdict})"
+                for row in bundle.rows
+                if row.verdict != hair.wig_format.VERDICT_WORKED
+            ]
+            detail = f"; excluded: {', '.join(excluded[:4])}" if excluded else ""
+            report.note(
+                f"{label} is incomplete: {worked} of "
+                f"{report.facts['fitting_row_count']} row(s) claimed as "
+                f"working{detail}"
+            )
+            bundles.append(bundle)
             continue
 
         verdict = _verify_signature(hair, entry)
@@ -674,11 +872,43 @@ def _check_fittings(
             report.ok(f"{label} is signed and verifies (key {fingerprint})")
 
         complete.append(entry)
+        bundles.append(bundle)
+
+    if legacy:
+        report.note(
+            f"{_fittings(len(legacy))} ({', '.join(sorted(set(legacy)))}) "
+            f"use the pre-claims shape. They bind a whole-file hash and say "
+            f"nothing about which rows anybody walked, so they cannot be "
+            f"counted under the claims model and are ignored here. Re-attest "
+            f"in the closet on HAIR 0.9.5 or later to bring them back."
+        )
+
+    # Pooled coverage, across every bundle including the incomplete ones. It
+    # answers a different question from the promotion bar and both are worth
+    # printing: coverage can reach the full row count while nobody at all has
+    # proven the whole wig, and three people who each proved a different
+    # third have not, between them, produced one person who can vouch for it.
+    if digests:
+        covered = hair.covered(bundles, digests)
+        report.facts["coverage"] = {
+            "covered": len(covered), "total": len(digests)
+        }
+        if len(covered) < len(digests):
+            unproven = [
+                signal.alias for signal in wig.signals
+                if hair.signal_row_digest(signal) not in covered
+            ]
+            report.note(
+                f"{len(covered)} of {len(digests)} rows proven by anybody. "
+                f"Unclaimed: {', '.join(unproven[:6])}"
+                + (" ..." if len(unproven) > 6 else "")
+            )
 
     if not complete:
         report.fail(
-            "no complete fitting survived the checks. Complete means every "
-            "signal confirmed, none failed, hash matching, signature valid."
+            "no complete fitting survived the checks. Complete means one "
+            "person claimed every row worked, bound to this wig_id, with a "
+            "signature that verifies."
         )
         return
 
@@ -687,11 +917,10 @@ def _check_fittings(
             "handle": e.get("handle"),
             "github": e.get("github"),
             "date": e.get("date"),
-            "hair_version": e.get("hair_version"),
+            "rows": len(e.get("rows") or []),
             "key_fingerprint": hair.fitting_signing.key_fingerprint(
                 e.get("key", "")
             ),
-            "send_times_used": read_send_times(e),
         }
         for e in complete
     ]
@@ -794,123 +1023,98 @@ def _check_fittings(
                 f"but treat them as one contributor for promotion."
             )
 
-    _check_send_times(hair, wig, complete, report)
 
+def _check_recipe(hair: Hair, wig: Any, report: Report) -> None:
+    """Read the transmit recipe the wig states, and sanity check it.
 
-def _check_send_times(
-    hair: Hair, wig: Any, complete: list[dict[str, Any]], report: Report
-) -> None:
-    """Aggregate the send-times evidence the fittings carry.
+    THIS IS NOT THE OLD SEND-TIMES AGGREGATE, and the difference matters.
+    Before hair-wig/3, each fitter reported ``send_times_used``: how many
+    presses THEIR room needed. The factory took the maximum across fitters,
+    because a threshold is not a tendency and averaging [1, 3, 3] down to 2
+    satisfies nobody who measured. From hair-wig/3 the wig itself states the
+    recipe per row and a claim binds it by digest, so there is no longer a
+    spread to aggregate: what the file says IS the answer, and disagreement
+    between fitters shows up as one of them not claiming the row.
 
-    Max, never mean. Send times is a threshold and not a tendency: a fitter
-    reporting 3 is saying "fewer than three was unreliable here", so averaging
-    [1, 3, 3] down to 2 produces a number that satisfies nobody who measured.
-
-    The spread is always printed alongside, because the max on its own hides
-    the interesting case. Three fittings that all say 1 and one that says 8 is
-    not a device that needs 8 frames, it is one room with a weak blaster, and
-    the person reading the gate output is the one who should decide that.
+    What is left to do here is read it, clamp it, and say out loud when it
+    asks for something a single knob in a generated integration cannot
+    express.
     """
-    observed: list[tuple[str, int]] = []
-    silent = 0
-    for entry in complete:
-        who = str(entry.get("handle") or entry.get("github") or "?")
-        value = read_send_times(entry)
-        if value is None:
-            silent += 1
-            if SEND_TIMES_KEY in entry:
-                report.note(
-                    f"fitting by {who} carries a "
-                    f"{SEND_TIMES_KEY} of {entry.get(SEND_TIMES_KEY)!r}, which "
-                    f"is not a whole number of sends. Ignored: a garbled field "
-                    f"claims nothing, and absent is not 1."
-                )
-            continue
-        raw = entry.get(SEND_TIMES_KEY)
-        if isinstance(raw, int) and raw != value:
-            report.note(
-                f"fitting by {who} records {SEND_TIMES_KEY} of {raw}, clamped "
-                f"to {value}. A signature makes a value unaltered, not sane."
-            )
-        observed.append((who, value))
-
-    facts: dict[str, Any] = {
-        "reporting": len(observed),
-        "silent": silent,
-        "values": [{"who": who, "value": value} for who, value in observed],
-    }
-
-    if not observed:
-        facts["derived"] = None
-        facts["source"] = "none"
-        report.facts["send_times"] = facts
-        report.note(
-            f"no complete fitting records {SEND_TIMES_KEY}, so there is no "
-            f"evidence behind any send count. Absent is not 1: these fittings "
-            f"predate HAIR 0.9.0 rather than proving one frame was enough. Ask "
-            f"the fitter how many sends the device needed, and say in the "
-            f"generated README that the number came from them and not from a "
-            f"fitting."
-        )
+    recipes = wig_recipes(wig)
+    if not recipes:
+        # A matrix wig carries send counts on cells, not signals. The lattice
+        # checks own that; nothing here applies.
+        report.facts["recipe"] = {"rows": 0, "derived": None}
         return
 
-    values = [value for _, value in observed]
-    local_max = max(values)
-    facts["min"] = min(values)
-    facts["max"] = local_max
+    sends = sorted({r.send_count for r in recipes.values()})
+    dittos = {a: r for a, r in recipes.items() if r.ditto_count}
+    bypass = {a: r for a, r in recipes.items() if r.bypass_protocol}
+    derived = max(sends)
 
-    # Prefer HAIR's aggregate where this checkout has one. Two implementations
-    # of one rule is how the rule drifts.
-    hair_max = hair.send_times_max(wig)
-    if hair_max is None:
-        derived = local_max
-        source = f"factory fallback (HAIR {hair.version} has no aggregate)"
-    else:
-        derived = hair_max
-        source = "HAIR fitting_send_times_max"
-        if hair_max != local_max:
-            # HAIR counts every complete, hash-valid fitting whether or not it
-            # is signed; the factory's list has already had signature failures
-            # removed, and a signature failure is a hard refusal above. So the
-            # two agreeing is the normal case and a disagreement is worth
-            # saying out loud rather than quietly resolving.
-            derived = max(hair_max, local_max)
-            report.note(
-                f"HAIR reads a send-times max of {hair_max} and the factory "
-                f"reads {local_max} from the fittings it accepted. Using the "
-                f"higher, {derived}."
-            )
+    report.facts["recipe"] = {
+        "rows": len(recipes),
+        "derived": derived,
+        "send_counts": sends,
+        "dittos": {a: r.ditto_count for a, r in dittos.items()},
+        "bypass": sorted(bypass),
+        "uniform": len(sends) == 1 and not dittos and not bypass,
+    }
 
-    facts["derived"] = derived
-    facts["source"] = source
-    report.facts["send_times"] = facts
-
-    spread = (
-        f"{facts['min']} to {facts['max']}"
-        if facts["min"] != facts["max"]
-        else f"{facts['max']} throughout"
-    )
-    quiet = f", {silent} recording nothing" if silent else ""
+    spread = f"{sends[0]}" if len(sends) == 1 else f"{sends[0]} to {sends[-1]}"
     report.ok(
-        f"send times: proven threshold {derived}, from "
-        f"{_fittings(len(observed))} reporting it, spread {spread}{quiet}"
+        f"transmit recipe: {len(recipes)} row(s), send count {spread}, "
+        f"{len(dittos)} with dittos, {len(bypass)} raw"
     )
 
-    # The wig's own per signal send_count is a different claim: a property of
-    # the code, where send times is a property of the room. A single knob in a
-    # generated integration cannot express a per code repeat, so if a wig ever
-    # carries one, say so rather than folding it into the default.
-    dittos = [
-        (key, count) for key, _, count in hair.fitting_rows(wig) if count > 1
-    ]
-    if dittos:
-        listing = ", ".join(f"{alias} x{count}" for alias, count in dittos)
+    if len(sends) > 1:
+        loud = sorted(
+            (a for a, r in recipes.items() if r.send_count == derived)
+        )
         report.note(
-            f"{len(dittos)} signal(s) carry a send_count above 1 in the wig "
-            f"itself: {listing}. That is a property of the code, not of the "
-            f"room, and one send-count setting cannot express it. Generate a "
-            f"per code repeat for those, or say in the README that they are "
-            f"sent once."
+            f"the wig asks for different send counts per row ({spread}). A "
+            f"single DEFAULT_SEND_COUNT cannot express that, so the "
+            f"integration has to ship the highest, {derived}, and rows that "
+            f"only wanted {sends[0]} will transmit more than they need. "
+            f"Wanting {derived}: {', '.join(loud[:6])}"
+            + (" ..." if len(loud) > 6 else "")
+        )
+
+    # Stated as a fact, not as an accusation. Whether the integration honours
+    # these is check_recipe_conformance's business, and it runs later and
+    # knows the answer; warning about a dropped ditto here would fire on every
+    # run including the ones where nothing was dropped.
+    if dittos:
+        counts = sorted({r.ditto_count for r in dittos.values()})
+        shape = str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
+        listing = ", ".join(
+            f"{alias} x{r.ditto_count}" for alias, r in sorted(dittos.items())
+        )
+        report.note(
+            f"{len(dittos)} of {len(recipes)} row(s) ask for repeat frames "
+            f"inside one transmission (ditto {shape}): {listing[:180]}"
+            + ("..." if len(listing) > 180 else "")
+        )
+
+    if bypass:
+        report.note(
+            f"{len(bypass)} row(s) ask to bypass the encoder and send the raw "
+            f"blob: {', '.join(sorted(bypass))}. A generated codebook re-encodes "
+            f"from a decoded identity by construction, so these rows cannot go "
+            f"through it."
+        )
+
+    # HAIR's comb calls this pair mutually exclusive and it is right: a raw
+    # blob has no ditto grammar, because only the encoder renders a shortened
+    # repeat frame. Whole-blob repetition is send_count's job. HAIR's own
+    # exporter cannot produce this; a hand-edited file can.
+    both = sorted(set(dittos) & set(bypass))
+    if both:
+        report.fail(
+            f"{len(both)} row(s) set both bypass_protocol and a ditto count: "
+            f"{', '.join(both)}. Only the encoder can render a repeat frame, "
+            f"so a bypassed row asking for dittos describes a waveform "
+            f"nothing can produce. Fix it in the wig."
         )
 
 
@@ -1563,59 +1767,59 @@ def check_coverage(codes: Any, wig: Any, report: Report) -> None:
 
 
 def check_send_count(component_dir: Path, report: Report) -> None:
-    """The shipped default must not sit below what a fitter proved it needs.
+    """The shipped default must not sit below what the wig asks for.
 
-    This is the whole point of carrying send times through. A fitting that says
-    3 is a report that one frame did not reliably reach the device, and an
-    integration that ships a default of 1 anyway reproduces the fault the
-    fitter already found: buttons that work sometimes, with no pattern, on
-    hardware that is fine. Shipping under the proven threshold is a defect the
-    gate can see, so it refuses rather than warning.
+    This is the whole point of carrying the recipe through. A wig asking for 3
+    is saying one frame did not reliably reach the device, and an integration
+    that ships a default of 1 anyway reproduces the fault whoever fitted it
+    already found: buttons that work sometimes, with no pattern, on hardware
+    that is fine. Shipping under the stated count is a defect the gate can
+    see, so it refuses rather than warning.
 
     Shipping above it is allowed and merely noted. More frames costs airtime,
     not correctness.
     """
-    send_times = report.facts.get("send_times") or {}
-    derived = send_times.get("derived")
+    recipe = report.facts.get("recipe") or {}
+    derived = recipe.get("derived")
     constants = read_default_send_count(component_dir)
     default = constants.get("DEFAULT_SEND_COUNT")
 
     if default is None:
-        if derived and derived > SEND_TIMES_MIN:
+        if derived and derived > SEND_COUNT_MIN:
             report.fail(
-                f"the fittings prove this device needs {derived} sends per "
-                f"press, and the integration has no DEFAULT_SEND_COUNT to set. "
-                f"It will transmit once and drop presses on the hardware "
-                f"somebody already tested it on."
+                f"the wig asks for {derived} sends per press, and the "
+                f"integration has no DEFAULT_SEND_COUNT to set. It will "
+                f"transmit once and drop presses on the hardware somebody "
+                f"already tested it on."
             )
         else:
             report.note(
                 "the integration has no DEFAULT_SEND_COUNT. Fine for a device "
-                "that answers a single frame; add one the moment a fitting "
-                "says otherwise."
+                "that answers a single frame; add one the moment a wig says "
+                "otherwise."
             )
         return
 
     report.facts["default_send_count"] = default
 
-    low = constants.get("MIN_SEND_COUNT", SEND_TIMES_MIN)
-    high = constants.get("MAX_SEND_COUNT", SEND_TIMES_MAX)
+    low = constants.get("MIN_SEND_COUNT", SEND_COUNT_MIN)
+    high = constants.get("MAX_SEND_COUNT", SEND_COUNT_MAX)
     if not low <= default <= high:
         report.fail(
             f"DEFAULT_SEND_COUNT is {default}, outside the integration's own "
             f"{low}..{high} bounds. The shipped default has to be a value the "
             f"config flow will accept."
         )
-    if high > SEND_TIMES_MAX:
+    if high > SEND_COUNT_MAX:
         report.note(
-            f"the integration allows up to {high} sends where HAIR clamps send "
-            f"times to {SEND_TIMES_MAX}. Above that the airtime costs more than "
-            f"the reliability buys."
+            f"the integration allows up to {high} sends where HAIR clamps a "
+            f"send count to {SEND_COUNT_MAX}. Above that the airtime costs "
+            f"more than the reliability buys."
         )
 
     if derived is None:
         report.note(
-            f"DEFAULT_SEND_COUNT is {default} with no fitting evidence behind "
+            f"DEFAULT_SEND_COUNT is {default} with nothing in the wig behind "
             f"it. Not a failure, but the generated README should say where the "
             f"number came from."
         )
@@ -1623,25 +1827,127 @@ def check_send_count(component_dir: Path, report: Report) -> None:
 
     if default < derived:
         report.fail(
-            f"DEFAULT_SEND_COUNT is {default} but the fittings prove "
-            f"{derived} sends were needed. Ship at least what somebody "
-            f"measured, or the first thing a user finds is the fickleness the "
-            f"fitter already diagnosed."
+            f"DEFAULT_SEND_COUNT is {default} but the wig asks for {derived}. "
+            f"Ship at least what the wig states, or the first thing a user "
+            f"finds is the fickleness the fitter already diagnosed."
         )
     elif default > derived:
         report.ok(
-            f"DEFAULT_SEND_COUNT {default} is at or above the proven threshold "
-            f"of {derived}"
+            f"DEFAULT_SEND_COUNT {default} is at or above the wig's {derived}"
         )
         report.note(
-            f"DEFAULT_SEND_COUNT is {default} where the fittings prove "
-            f"{derived}. More conservative than the evidence, which is allowed; "
-            f"it costs airtime and nothing else."
+            f"DEFAULT_SEND_COUNT is {default} where the wig asks for "
+            f"{derived}. More conservative than the file, which is allowed; it "
+            f"costs airtime and nothing else."
         )
     else:
         report.ok(
-            f"DEFAULT_SEND_COUNT {default} matches the proven threshold of "
-            f"{derived}"
+            f"DEFAULT_SEND_COUNT {default} matches the wig's {derived}"
+        )
+
+
+def check_recipe_conformance(codes: Any, wig: Any, report: Report) -> None:
+    """The integration must reproduce every row's recipe, or say it cannot.
+
+    The codec checks above prove the generated encoder puts the RIGHT
+    IDENTITY on the air. They cannot prove it puts the right WAVEFORM on the
+    air, because identity is what survives decoding and the recipe is what
+    happens either side of it. From hair-wig/3 the row digest binds
+    ``ditto_count`` and ``bypass_protocol``, so a claim is a statement about
+    the waveform, and an integration that silently drops either one ships
+    something nobody attested however green the forward and reverse checks
+    are.
+
+    The convention, mirroring ``WIG_ALIASES``: a generated codebook exposes
+    ``WIG_RECIPE``, mapping the wig's alias verbatim to
+    ``(send_count, ditto_count, bypass_protocol)``. It is optional only while
+    every row is plain -- send count alone, no dittos, no bypass -- because
+    that is the case DEFAULT_SEND_COUNT already covers on its own. The moment
+    one row asks for more, the map is mandatory and is checked value by value.
+
+    REFUSING IS THE POINT. Until the generator can express a ditto, the
+    honest outcome for a wig that needs one is a refusal naming the rows, not
+    a published integration that quietly rounds the waveform off.
+    """
+    stated = wig_recipes(wig)
+    if not stated:
+        return
+    demanding = {a: r for a, r in stated.items() if not r.plain}
+    declared = getattr(codes, "WIG_RECIPE", None)
+
+    if declared is None:
+        if not demanding:
+            report.note(
+                "the codebook declares no WIG_RECIPE. Fine here: every row "
+                "wants a plain send count, which DEFAULT_SEND_COUNT covers."
+            )
+            return
+        listing = ", ".join(
+            f"{alias} ({r.describe()})" for alias, r in sorted(demanding.items())
+        )
+        report.fail(
+            f"{len(demanding)} row(s) ask for a waveform this integration "
+            f"cannot express, and the codebook declares no WIG_RECIPE: "
+            f"{listing}. The row digest a fitter signed covers the ditto "
+            f"count and the bypass flag, so publishing without them ships a "
+            f"different waveform under somebody else's attestation. Teach the "
+            f"integration the recipe, or leave this wig unpublished."
+        )
+        return
+
+    if not isinstance(declared, dict):
+        report.fail(
+            f"WIG_RECIPE is {type(declared).__name__}, expected a dict keyed "
+            f"by the wig's aliases."
+        )
+        return
+
+    missing = sorted(set(stated) - set(declared))
+    extra = sorted(set(declared) - set(stated))
+    if missing:
+        report.fail(
+            f"WIG_RECIPE is missing {len(missing)} of the wig's rows: "
+            f"{', '.join(missing[:6])}"
+            + (" ..." if len(missing) > 6 else "")
+        )
+    if extra:
+        report.fail(
+            f"WIG_RECIPE names {len(extra)} row(s) the wig does not have: "
+            f"{', '.join(extra[:6])}"
+            + (" ..." if len(extra) > 6 else "")
+        )
+
+    mismatched: list[str] = []
+    for alias, want in sorted(stated.items()):
+        got = declared.get(alias)
+        if got is None:
+            continue
+        try:
+            send, ditto, bypass = got
+            same = (
+                int(send) == want.send_count
+                and int(ditto) == want.ditto_count
+                and bool(bypass) is want.bypass_protocol
+            )
+        except (TypeError, ValueError):
+            mismatched.append(f"{alias}: {got!r} is not a 3-tuple")
+            continue
+        if not same:
+            mismatched.append(
+                f"{alias}: integration says {tuple(got)}, wig says "
+                f"({want.send_count}, {want.ditto_count}, "
+                f"{want.bypass_protocol})"
+            )
+    if mismatched:
+        report.fail(
+            f"{len(mismatched)} row(s) where WIG_RECIPE disagrees with the "
+            f"wig: {'; '.join(mismatched[:4])}"
+            + (" ..." if len(mismatched) > 4 else "")
+        )
+    elif not missing and not extra:
+        report.ok(
+            f"recipe: all {len(stated)} row(s) declared, matching the wig "
+            f"({len(demanding)} needing more than a plain send count)"
         )
 
 
@@ -1667,6 +1973,7 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
         if report.facts.get("content_hash"):
             print()
             print("Record these in the generated README:")
+            print(f"  wig id:        {report.facts.get('wig_id') or 'none'}")
             print(f"  content hash:  {report.facts['content_hash']}")
             print(f"  protocol:      {report.facts.get('protocol', '?')}")
             print(f"  address:       {report.facts.get('address', '?')}")
@@ -1689,29 +1996,38 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
                 )
             else:
                 print("  combed:        no receipt")
-            send_times = report.facts.get("send_times") or {}
-            if send_times.get("derived"):
-                basis = (
-                    f"max across "
-                    f"{_fittings(int(send_times.get('reporting') or 0))}, "
-                    f"spread {send_times.get('min')} to "
-                    f"{send_times.get('max')}"
+            recipe = report.facts.get("recipe") or {}
+            if recipe.get("derived"):
+                counts = recipe.get("send_counts") or []
+                spread = (
+                    f"{counts[0]}" if len(counts) == 1
+                    else f"{counts[0]} to {counts[-1]}, shipping the highest"
                 )
-                print(f"  send times:    {send_times['derived']} ({basis})")
-            else:
+                extras = []
+                if recipe.get("dittos"):
+                    extras.append(f"{len(recipe['dittos'])} with dittos")
+                if recipe.get("bypass"):
+                    extras.append(f"{len(recipe['bypass'])} raw")
+                tail = f", {', '.join(extras)}" if extras else ""
                 print(
-                    "  send times:    not recorded by any fitting. Ask the "
-                    "fitter, and say so."
+                    f"  send count:    {recipe['derived']} "
+                    f"(stated by the wig, {spread}{tail})"
+                )
+            else:
+                print("  send count:    not stated by the wig")
+            cov = report.facts.get("coverage") or {}
+            if cov:
+                print(
+                    f"  rows proven:   {cov.get('covered')} of "
+                    f"{cov.get('total')}, pooled across every fitter"
                 )
             for fitting in report.facts.get("fittings", []):
-                sends = fitting.get("send_times_used")
                 print(
                     f"  fitting:       {fitting.get('handle')} "
                     f"(github: {fitting.get('github') or 'none'}) "
                     f"{fitting.get('date')} "
-                    f"HAIR {fitting.get('hair_version')} "
-                    f"key {fitting.get('key_fingerprint') or 'unsigned'} "
-                    f"sends {sends if sends is not None else 'not recorded'}"
+                    f"{fitting.get('rows')} row(s) "
+                    f"key {fitting.get('key_fingerprint') or 'unsigned'}"
                 )
     else:
         print(f"GATE FAILED: {len(report.failures)} problem(s). Nothing publishes.")
@@ -1824,6 +2140,7 @@ def main(argv: list[str] | None = None) -> int:
                 if codes is not None:
                     check_forward(hair, codes, identities, report)
                     check_coverage(codes, wig, report)
+                    check_recipe_conformance(codes, wig, report)
                 check_send_count(codes_path.parent, report)
             if decoder_path is not None:
                 try:
