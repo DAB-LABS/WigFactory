@@ -41,6 +41,7 @@ __all__ = [
     "describe",
     "git",
     "manifest_of",
+    "provenance_lines",
     "repo_name_for",
     "run_the_gate",
     "topic_safe",
@@ -240,7 +241,7 @@ class GitHub:
         return json.loads(out).get("html_url", "")
 
     def wait_for_checks(
-        self, repo: str, branch: str, timeout: int = 600
+        self, repo: str, branch: str, timeout: int = 600, grace: int = 120
     ) -> tuple[bool, str]:
         """Block until every check on ``branch`` finishes. True if all passed.
 
@@ -250,19 +251,41 @@ class GitHub:
         failing. Deleting the branch out from under a run that was still
         asking GitHub about the ref is the same bug wearing a different hat.
         """
+        import time
+
         if self.via_gh:
             # gh blocks until every check finishes and exits non-zero if any
-            # of them failed, which is exactly the question being asked.
-            code, out = self._run(
-                ["gh", "pr", "checks", branch, "--repo", f"{OWNER}/{repo}",
-                 "--watch", "--fail-fast"]
-            )
-            if code == 0:
-                return True, "every check passed"
-            tail = " ".join(out.split())[-200:]
-            return False, f"gh reports a failing or pending check: {tail}"
-
-        import time
+            # of them failed, which is exactly the question being asked --
+            # ONCE THE CHECKS EXIST. It does not wait for them to appear, and
+            # a workflow run takes a few seconds to register after a push, so
+            # calling this immediately returns "no checks reported" and exits
+            # non-zero. That is a pending state wearing a failure's clothes,
+            # and reading it as failure refused a perfectly good build whose
+            # lint had in fact already passed.
+            #
+            # So: retry while the answer is still "none yet", and only give
+            # up when a grace period says none are coming. A repository with
+            # no workflows at all lands there too, and still refuses, because
+            # "nothing checked this" is not a pass.
+            appear_by = time.time() + grace
+            while True:
+                code, out = self._run(
+                    ["gh", "pr", "checks", branch, "--repo", f"{OWNER}/{repo}",
+                     "--watch", "--fail-fast"]
+                )
+                if code == 0:
+                    return True, "every check passed"
+                tail = " ".join(out.split())[-200:]
+                if "no checks reported" not in out.lower():
+                    return False, f"gh reports a failing check: {tail}"
+                if time.time() >= appear_by:
+                    return False, (
+                        f"no checks appeared on {branch} within {grace}s. "
+                        f"Either the workflows are not configured to run on "
+                        f"this branch or the repository has none, and an "
+                        f"unchecked branch is not a passing one"
+                    )
+                time.sleep(5)
 
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -378,21 +401,6 @@ def describe(facts: dict[str, Any]) -> tuple[str, list[str]]:
         if slug and slug not in topics:
             topics.append(slug)
     return description[:350], topics[:20]
-
-
-#: Gate facts a publish or update record cites, in the order they read best.
-#: Kept HERE rather than spelled out at each call site, because the two tools
-#: drifted the moment the gate's fact names changed: hair-wig/3 replaced
-#: ``send_times`` with ``recipe``, and update_integration went on asking for
-#: the old key. A missing key in an f-string does not raise, it prints a
-#: default, so both the commit message and the pull request body would have
-#: gone on saying "proven threshold unrecorded" about a wig that states one.
-#: One definition, one place to fix, and provenance_lines refuses on a key it
-#: does not recognize rather than printing a shrug.
-PROVENANCE_KEYS = (
-    "wig_id", "content_hash", "shop_commit", "default_send_count",
-    "recipe", "coverage", "promotion_handles", "hair_version",
-)
 
 
 def provenance_lines(facts: dict[str, Any]) -> list[str]:
