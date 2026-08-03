@@ -74,3 +74,47 @@ WIG_ALIASES: dict[str, SanmliTh05Code] = {
     "2 Hour": SanmliTh05Code.TIMER_2H,
     "FL (Flicker)": SanmliTh05Code.FLICKER,
 }
+
+# The transmit recipe, per row, exactly as the wig states it:
+# (send_count, ditto_count, bypass_protocol).
+#
+# WIG_ALIASES says what to send. This says how, and the two are separate
+# because they are proven separately. A fitter's claim binds the row digest,
+# which is sha256 over the normalized Pronto, the ditto count and the bypass
+# flag; the send count is deliberately outside it, because how many times to
+# press depends on the room rather than on the device.
+#
+# So the ditto count here is not a tuning knob. It is part of what somebody
+# signed for, and shipping a different one would put a waveform on the air
+# that nobody attested while every codec check still read green. The gate
+# compares this map against the wig value by value for exactly that reason.
+#
+# Every row wants one ditto: RC-5 re-sends while a key is held, and one
+# appended repeat frame is what a short physical tap actually looks like.
+WIG_RECIPE: dict[str, tuple[int, int, bool]] = {
+    "On": (3, 1, False),
+    "Off": (3, 1, False),
+    "SL (Candle Like)": (3, 1, False),
+    "Light (Solid Light)": (3, 1, False),
+    "8 Hour": (3, 1, False),
+    "6 Hour": (3, 1, False),
+    "4 Hour": (3, 1, False),
+    "Brighten Up": (3, 1, False),
+    "Dim Down": (3, 1, False),
+    "BL (Fade Out)": (3, 1, False),
+    "2 Hour": (3, 1, False),
+    "FL (Flicker)": (3, 1, False),
+}
+
+# The ditto count every row in this wig asks for. Derived here rather than
+# written by hand so it cannot drift from the map above, and asserted to be
+# uniform because the entity applies one value to every press: if a future
+# refit gives one button a different ditto count, this raises at import
+# instead of silently sending the wrong thing for eleven of the twelve.
+_DITTOS = {recipe[1] for recipe in WIG_RECIPE.values()}
+if len(_DITTOS) != 1:  # pragma: no cover - a refit would have to cause this
+    raise ValueError(
+        f"WIG_RECIPE asks for mixed ditto counts {sorted(_DITTOS)}. The "
+        f"entity applies one per press, so this needs a per code path first."
+    )
+WIG_DITTO_COUNT = _DITTOS.pop()

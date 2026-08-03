@@ -9,7 +9,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
 from . import Th05ConfigEntry
-from .codes import SanmliTh05Code
+from .codes import WIG_DITTO_COUNT, SanmliTh05Code
 from .const import (
     CONF_SEND_COUNT,
     DEFAULT_SEND_COUNT,
@@ -71,18 +71,33 @@ class Th05EmitterEntity(Th05Entity, InfraredEmitterConsumerEntity):
     async def _async_send_code(self, code: SanmliTh05Code) -> None:
         """Send one codebook entry as one press, then advance the toggle.
 
-        The frame goes out `_send_count` times with a pause between, and every
-        frame in the press carries the SAME toggle. That is what makes it one
-        press repeated rather than several presses: the toggle is how the candle
-        tells a held key from a new one, so flipping it between frames would
-        turn a single Dim into three steps.
+        Two different repeats are at work here and they are not
+        interchangeable.
+
+        `repeat_count` is the DITTO: repeat frames the encoder renders inside
+        a single transmission, back to back at the protocol's own timing. It
+        comes from the wig, it is part of the waveform, and it is inside the
+        row digest a fitter signed. It is not tunable, because changing it
+        would mean transmitting something nobody attested.
+
+        `_send_count` is DELIVERY: the whole transmission sent again after a
+        pause, because a receiver on a duty cycle can sleep through one. It is
+        the user's to change, and it sits outside the digest on purpose --
+        how many times to press depends on the room, not on the device.
+
+        Every frame in the press carries the SAME toggle. That is what makes
+        it one press repeated rather than several presses: the toggle is how
+        the candle tells a held key from a new one, so flipping it between
+        frames would turn a single Dim into three steps.
 
         The toggle advances once, afterwards, and only if the send did not
         raise. A press that reached nothing should not consume a toggle value,
         because the candle never saw it.
         """
         data = self._entry.runtime_data
-        command = code.to_command(toggle=data.toggle)
+        command = code.to_command(
+            toggle=data.toggle, repeat_count=WIG_DITTO_COUNT
+        )
         for frame in range(self._send_count):
             if frame:
                 await asyncio.sleep(SEND_REPEAT_GAP)
