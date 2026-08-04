@@ -298,8 +298,8 @@ test stays a single unambiguous question.
 
 **A pre-claims fitting no longer counts toward anything.** It cannot: it says
 nothing about which rows anybody walked, so counting it would mean inventing
-evidence. The gate names it and moves on. Re-attesting in the closet on 0.9.5
-brings it back.
+evidence. The gate names it and moves on. Adopting the wig onto a device on
+0.9.5 and saving it back to the closet brings it back.
 
 **Coverage and the promotion bar answer different questions.** Coverage is
 how many rows anybody has proven, pooled. The bar is how many distinct people
@@ -342,11 +342,46 @@ handles and dates, HAIR version, send count and pooled coverage go into the
 generated README in step 6, and you cannot reconstruct them later.
 
 **If a wig fails this gate, stop and report why.** Do not repair the wig.
-Corrections are the fitter's job, in HAIR, with a fresh fitting. In
+Corrections are the fitter's job, in HAIR, on the device: adopt it, fix it
+there, save it back to the closet. In
 particular, never edit a `github` value to make a count come out better: the
 signature covers it, and rewriting it forges somebody's attestation.
 
 Then copy the wig into `wigs/` per ground rule 1 and work from that copy.
+
+---
+
+### Where a wig comes from, and why the factory never repairs one
+
+HAIR 0.9.5 moved fitting out of the closet and onto the device. It matters
+here because it decides what arrives and what this repository is allowed to
+do about it.
+
+Somebody adopts a wig onto a device and lives with it. The device window is
+the workbench: test a command, rename it, trash it, re-capture a bad code,
+tune sends and dittos. When it works they SAVE TO CLOSET, tick the rows they
+are willing to vouch for, and sign. That signature is the claim, and the
+wig is a snapshot of what was working at that moment.
+
+**Combing is the other half, and it is orthogonal.** A claim proves a person
+pointed a blaster and a device answered. A comb proves the other several
+hundred codes are internally coherent. HAIR measured the dimension checklist
+against 74 known-defective cells and it caught one, which is not a flaw in
+the checklist: a checklist attests DIMENSIONS and says so. Combing exists
+because that leaves a gap, and the two together close it.
+
+**How a defect actually gets fixed, and it is not here.** The comb flags a
+cell; HAIR mints it as its own command row on the device, deliberately not
+mapped to any entity feature; the person tests it with the remote in their
+hand, replaces the code by capture or paste, and tests again; the changed
+rows surface for attestation at save time. The whole loop is a person with
+hardware, and it closes without any derivation machinery.
+
+So the factory's job when a wig fails the gate is to **say what is wrong and
+stop**. Never repair a wig here. A repaired wig arrives already repaired,
+and the gate should recognize that rather than accuse it: a comb receipt
+recording suspects that are no longer present is what success looks like,
+and the gate says so.
 
 ---
 
@@ -414,10 +449,10 @@ the right source for every human-facing string: the `name` in
 description, the topics. They are the wrong source for the slug, the domain
 or the folder, for three reasons.
 
-- They are mutable. The canonical hash covers only `alias`, `pronto` and
-  `send_count`, so brand and model can be corrected without invalidating a
-  single fitting. The filename cannot drift, because under the shop's
-  immutability rule a rename is a new file.
+- They are mutable. Nothing about a claim covers them: a row digest is
+  `pronto`, `ditto_count` and `bypass_protocol`, so brand and model can be
+  corrected without invalidating a single claim. The filename cannot drift,
+  because under the shop's immutability rule a rename is a new file.
 - They are free text. `name` on the candle wig is `Candles (Tea Light)`,
   and parentheses are not legal in a repository name. Deriving identifiers
   from them means a sanitizer, which is a hand-applied casing spec hiding

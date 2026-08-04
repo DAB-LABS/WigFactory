@@ -91,6 +91,16 @@ RECIPE_MAJOR = 3
 # to update it, rather than an AttributeError forty frames down. That is not
 # hypothetical: 0.9.5 removed ``wig_fitting.fitting_rows`` and every entry
 # point in this repo died on the traceback rather than refusing.
+# HAIR's comb check names, from wig_comb.py. Spelled out because the gate
+# reasons about WHICH classes it can independently reproduce, and a typo in a
+# string key would silently move a class into the "cannot see" bucket, which
+# reads as caution and is actually blindness.
+COMB_MALFORMED = "malformed"
+COMB_STRAY_BURST = "stray-burst"
+COMB_FRAME_SHAPE = "frame-shape"
+COMB_DUPLICATED_NEIGHBOUR = "duplicated-neighbour"
+COMB_MISSING_CELL = "missing-cell"
+
 REQUIRED_HAIR_API = {
     "wig_format": (
         "wig_row_digests", "signal_row_digest", "row_digest", "claims_of",
@@ -1169,11 +1179,23 @@ def check_comb(wig: Any, report: Report) -> None:
         "counts": dict(counts),
     }
 
-    # What this run found on its own, so the two can be compared rather than
-    # one being taken on faith.
-    ours = len(report.facts.get("lattice_defects") or []) + len(
-        (report.facts.get("frame_shape") or {}).get("malformed") or []
-    ) + len(report.facts.get("missing_cells") or [])
+    # What this run found on its own, per class, so the two can be compared
+    # rather than one being taken on faith.
+    #
+    # PER CLASS, not as one total, because the gate does not check everything
+    # the comb checks. Ramp dittos it never looks at; stray cells and
+    # coordinate collisions it does not currently reproduce. Comparing totals
+    # would let a class the gate cannot see cancel out a class it can, in
+    # either direction.
+    shape = report.facts.get("frame_shape") or {}
+    ours_by_class = {
+        COMB_DUPLICATED_NEIGHBOUR: len(report.facts.get("lattice_defects") or []),
+        COMB_MALFORMED: len(shape.get("malformed") or []),
+        COMB_FRAME_SHAPE: len(shape.get("malformed") or []),
+        COMB_STRAY_BURST: len(shape.get("noisy") or []),
+        COMB_MISSING_CELL: len(report.facts.get("missing_cells") or []),
+    }
+    ours = sum(ours_by_class.values())
 
     if suspects == 0:
         report.ok(f"combed{when}, no suspects recorded")
@@ -1188,9 +1210,48 @@ def check_comb(wig: Any, report: Report) -> None:
         return
 
     detail = "; ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
+
+    # THE REPAIRED CASE, and it has to come first. A receipt recording
+    # suspects on a lattice that no longer contains them is what a completed
+    # repair looks like: HAIR flagged the cells, minted a command row for each
+    # one, somebody pointed a remote at them and replaced the bad codes, and
+    # the wig arrived here clean. Printing "the comb found 8 suspects, that is
+    # the class that looks like it worked while landing on the wrong state"
+    # about that wig accuses somebody of the exact defect they just fixed by
+    # hand. It is also the first thing a successful repair would ever have
+    # seen from this gate.
+    #
+    # Only the classes this run can independently see count toward the
+    # judgment. A receipt whose remaining findings are all classes the gate
+    # does not reproduce gets the honest smaller sentence instead.
+    seen = {k: v for k, v in counts.items() if k in ours_by_class}
+    unseen = {k: v for k, v in counts.items() if k not in ours_by_class}
+    if seen and not ours:
+        healed = "; ".join(f"{k}: {v}" for k, v in sorted(seen.items()))
+        report.facts["comb"]["repaired"] = sum(seen.values())
+        report.facts["comb"]["unresolved"] = 0
+        report.ok(
+            f"combed{when}: {sum(seen.values())} suspect(s) recorded "
+            f"({healed}), none of which are still in this wig. That is what a "
+            f"completed repair looks like."
+        )
+        if unseen:
+            rest = "; ".join(f"{k}: {v}" for k, v in sorted(unseen.items()))
+            report.note(
+                f"the receipt also records {sum(unseen.values())} finding(s) "
+                f"in classes this gate does not reproduce ({rest}), so it can "
+                f"neither confirm nor clear those. Read the receipt."
+            )
+        return
+
+    still = "; ".join(
+        f"{k}: {v}" for k, v in sorted(seen.items()) if ours_by_class.get(k)
+    )
+    report.facts["comb"]["unresolved"] = ours
     report.note(
         f"the comb found {suspects} suspect(s){when}"
         + (f" ({detail})" if detail else "")
+        + (f", and this run still sees {still}" if still else "")
         + ". Read the receipt: combing sees things a fitting cannot, because "
         "a checklist samples dimensions rather than cells."
     )
@@ -1984,7 +2045,8 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
             print(f"  HAIR version:  {report.facts.get('hair_version', '?')}")
             if report.facts.get("shop_commit"):
                 print(
-                    f"  source:        WigShop@{report.facts['shop_commit']} "
+                    f"  source:        "
+                    f"WigShop@{str(report.facts['shop_commit'])[:7]} "
                     f"({report.facts.get('shop_date', '?')})"
                 )
             print(
@@ -1993,10 +2055,17 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
             )
             comb = report.facts.get("comb")
             if comb:
+                repaired = comb.get("repaired")
+                if repaired:
+                    state = (
+                        f"{repaired} suspect(s) recorded and none still "
+                        f"present"
+                    )
+                else:
+                    state = f"{comb.get('suspects')} suspect(s)"
                 print(
                     f"  combed:        {comb.get('date') or 'undated'}, "
-                    f"{comb.get('suspects')} suspect(s) "
-                    f"(receipt, not independently verified)"
+                    f"{state} (receipt, not independently verified)"
                 )
             else:
                 print("  combed:        no receipt")
