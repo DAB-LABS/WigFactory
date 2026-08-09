@@ -47,7 +47,6 @@ from _common import (  # noqa: E402
     DEFAULT_HAIR,
     DEFAULT_SHOP,
     OWNER,
-    REPO_ROOT,
     GitHub,
     Refusal,
     describe,
@@ -100,7 +99,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--integration", required=True, type=Path)
     parser.add_argument("--hair", type=Path, default=DEFAULT_HAIR)
     parser.add_argument("--shop", type=Path, default=DEFAULT_SHOP)
-    parser.add_argument("--exemption", type=Path, default=REPO_ROOT / "EXEMPTIONS.md")
     parser.add_argument("--repo", help="override the derived repository name")
     parser.add_argument(
         "--publish",

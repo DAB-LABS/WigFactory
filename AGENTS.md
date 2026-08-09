@@ -70,9 +70,9 @@ which: your change broke something, or somebody else's repository changed and
 this one has not caught up yet. Both are worth knowing and neither should be
 silenced by pinning.
 
-CI does not enforce `--require-handles`. The promotion bar is a publishing
-decision the owner makes per build, and a shop full of honestly-short wigs is
-not a broken repository.
+CI does not pass `--require-handles`. The account count is reported, never
+enforced, and whether a wig is proven widely enough to publish is a judgment
+the owner makes at publish time.
 
 ---
 
@@ -141,9 +141,9 @@ The input is one `.wig.json` file. Name it either way:
 
 **Prefer the slug.** It reads the merged file every contributor sees, and it
 records the shop commit, which is what makes the fitting evidence
-reproducible later. Fittings accumulate over time, so "three distinct
-accounts" is a claim about a moment; `WigShop@<sha>` is how somebody checks
-that claim a year from now. A wig named by path carries no such record and
+reproducible later. Fittings accumulate over time, so an account count is a
+claim about a moment; `WigShop@<sha>` is how somebody checks it a year from
+now. A wig named by path carries no such record and
 the gate will not invent one.
 
 Run the gate before you look at anything else.
@@ -182,25 +182,29 @@ account, and says out loud when two fittings collapse to one person. A
 display handle names nobody a reviewer can check, so it never counts toward
 the bar.
 
-The standing promotion bar is **three complete fittings from three distinct
-GitHub accounts**. The gate reports the count on every run and enforces it
-only when you pass `--require-handles 3`.
+**There is no promotion bar.** The formal three-accounts rule is retired
+(owner ruling 2026-08-04, following HAIR retiring it from the format on
+2026-08-02), and `EXEMPTIONS.md` went with it. A rule that could be waived by
+editing a file sitting beside it was never really a rule, and the waiver
+machinery existed only to soften a threshold that should have been a
+judgment.
 
-**Exemptions are written down or they do not exist.** Not passing the flag
-is how a bar quietly stops being a bar, so a waiver lives in
-`EXEMPTIONS.md` and the gate reads it:
+What replaced it is the Wig Shop's own shelf policy, which is stricter where
+it counts. **The shelf admits perfect fits only**: a wig lands when at least
+one person has claimed every row of it worked on their own hardware. So every
+wig arriving here is already proven by somebody. The open question is how
+many people, and the gate reports that number on every run rather than ruling
+on it.
 
-```bash
-.venv/bin/python verify/verify_wig.py --wig <slug> --integration <path> \
-  --require-handles 3 --exemption EXEMPTIONS.md
-```
+`--require-handles N` still exists for anybody who wants a hard floor on a
+particular run. It is off by default and CI does not pass it.
 
-With an entry matching the wig, the handle failure becomes a loud note that
-quotes the reason back into the build output, so the published artifact's
-log says out loud that it published under a waiver and why. With no matching
-entry it still refuses. Each entry names the wig, the bar waived, the
-reason, who ruled it, the date, and the condition that retires it. One wig's
-waiver never covers another.
+**What the count actually means.** One account is one person who vouched for
+the whole wig. Four is four people, four units, four rooms, four blasters,
+all arriving at the same answer. Nobody can fake that and no tool can
+generate it. Whether it is enough to publish under the organization's name is
+the owner's call at step 7, made while looking at the number, not a threshold
+the gate enforces on its behalf.
 
 ### Matrix wigs
 
@@ -301,11 +305,11 @@ nothing about which rows anybody walked, so counting it would mean inventing
 evidence. The gate names it and moves on. Adopting the wig onto a device on
 0.9.5 and saving it back to the closet brings it back.
 
-**Coverage and the promotion bar answer different questions.** Coverage is
-how many rows anybody has proven, pooled. The bar is how many distinct people
-have proven ALL of them. Coverage can be 12 of 12 while nobody at all can
-vouch for the wig, because three people each proved a different third. The
-gate prints both; do not substitute one for the other.
+**Coverage and the account count answer different questions.** Coverage is
+how many rows anybody has proven, pooled. The count is how many distinct
+people have proven ALL of them. Coverage can be 12 of 12 while nobody at all
+can vouch for the whole wig, because three people each proved a different
+third. The gate prints both; do not substitute one for the other.
 
 ### 3.2 The integration has to reproduce the recipe
 
@@ -350,6 +354,62 @@ signature covers it, and rewriting it forges somebody's attestation.
 Then copy the wig into `wigs/` per ground rule 1 and work from that copy.
 
 ---
+
+### What the Wig Shop guarantees, and what it does not
+
+The shop is the factory's input and its rules decide what can arrive. Three
+of them matter here.
+
+**Perfect fits only.** A wig lands on the shelf when at least one person has
+claimed every row of it worked on their own hardware, wig-level rather than
+bundle-level. An honest partial attestation may ride alongside; it just
+cannot open the door. So a wig reaching this repository is already proven by
+somebody, and the factory's remaining question is how widely.
+
+**Identity is the signing key, over there.** The shop counts keys, because a
+name is what somebody typed and a key is which install they typed it on. One
+install has one current word: a re-fit from the same install replaces that
+person's earlier bundle rather than stacking a duplicate.
+
+The factory counts GitHub accounts instead, and that is deliberate rather
+than a disagreement. The shop is asking "is this one install saying one
+thing"; the factory is asking "how many checkable people". The shop's own
+contributor guide says the handle exists partly so a maintainer can notice
+two fittings from one person on two machines "when independence is being
+counted at promotion", which is this repository's job. Two bundles, two keys,
+one account is therefore ONE independent account here, counted once and said
+out loud.
+
+**Content changes arrive as supersession.** A changed wig is a NEW wig with a
+new `wig_id` that names its ancestor in `supersedes`; the old file leaves the
+shelf. Critically, the successor composes the same brand-kind-model filename,
+so the ordinary supersession pull request is a modify at one path.
+
+That last one has teeth for anything already published. A wig can be replaced
+underneath a repository that was built from its ancestor, with the filename
+unchanged, and only the `wig_id` says so. `supersedes` is recorded as a gate
+fact for exactly this reason, and the update path has to compare it against
+what the published integration was built from rather than assuming a
+filename means what it used to.
+
+### Filenames carry a tier suffix. It is not part of the device.
+
+HAIR names a download `<brand>-<kind>-<model>-perfect-fit.wig.json`, and that
+is what lands in the shop. The suffix records what the fitting looked like at
+the moment of download.
+
+**It must never reach a repository name or a domain.** The shop itself never
+reads a tier from a filename, because a name that could promote a file by
+being edited would defeat the point of signed per-row claims. Here the reason
+is different and just as firm: a repository name, a domain, a config entry
+and a device registry entry are all permanent, and baking a transient label
+into them means somebody's install carries it forever.
+
+So the repository is `<brand>-<kind>-<model>-ir` and the tier is stripped:
+`fable-fan-ft-9000-perfect-fit.wig.json` publishes as `fable-fan-ft-9000-ir`.
+`verify_wig.device_stem` owns the stripping and `TIER_SUFFIXES` owns the
+list. Either spelling resolves a wig on the command line, so you can name the
+device rather than remember which suffix the file landed with.
 
 ### Where a wig comes from, and why the factory never repairs one
 
@@ -691,8 +751,7 @@ the part most likely to be done carelessly. It must carry:
 - Every fitter: handle, GitHub handle, date, how many rows they claimed, and
   the signing key fingerprint. Print handles as the fitter typed them. They
   are compared canonically and displayed verbatim, never rewritten.
-- The distinct-account count against the promotion bar, and the exemption if
-  one applies.
+- The independent-account count, as a number rather than a verdict.
 - **Pooled row coverage**, which is a different number from the account
   count and is worth stating beside it. "12 of 12 rows proven, by 1 account
   of 3" says something true that neither number says alone.
@@ -719,8 +778,9 @@ Gates, all of them, before anything is pushed:
 
 - Step 4 green in both directions.
 - The input gate's fitting evidence real and recorded in the README.
-- **`--require-handles 3` green, or a written exemption naming this build.**
-  The POC has one. Nothing else does by default.
+- **The account count read, and your ruling on it.** There is no threshold;
+  publishing under the organization's name is a decision, and this is the
+  moment it gets made.
 - The shop clone refreshed (`./setup.sh`) and its commit stamped.
 - Attribution done or honestly marked unknown.
 - The owner has ruled on the repository name and the visibility.
@@ -812,10 +872,12 @@ fixed at the source and never here.
 Without `--publish` it prints what it would create and touches nothing. The
 script does all of it:
 
-1. **Re-runs the gate itself**, with `--require-handles 3` or a matching
-   `--exemption`. Non-zero exit stops everything. This is load bearing: a
-   green run from earlier proves nothing about the tree now, so publication
-   is gated by construction rather than by whoever remembered.
+1. **Re-runs the gate itself**, full, against the tree as it stands. Anything
+   short of a pass stops everything. This is load bearing: a green run from
+   earlier proves nothing about the tree now, so publication is gated by
+   construction rather than by whoever remembered. It does not pass
+   `--require-handles`; the account count reaches the owner as a number in
+   the report, at the moment they are deciding whether to push.
 2. Derives the repository name from the wig stem plus `-ir`, and the
    description and topics from the wig's `brand`, `model`, `kind` and
    `identifiers`.
@@ -835,9 +897,10 @@ script does all of it:
    about to be created. After the push it is a normal repository with a
    normal pull request process, and the factory does not reach back in.
 
-**Updating a published integration is a different command.** A wig gets
-refitted, combed or repaired; the send count moves; the stamp goes stale. That
-happens far more often than a first publish, so it is automated too:
+**Updating a published integration is a different command.** More people
+claim a wig; the shop publishes a successor with a new `wig_id` at the same
+filename; the send count moves; the stamp goes stale. That happens far more
+often than a first publish, so it is automated too:
 
 ```bash
 .venv/bin/python publish/update_integration.py --wig <slug> --integration <path>
@@ -888,7 +951,7 @@ when the secret is not in the file.
 
 ## 8. When it is proven
 
-Three complete fittings from three distinct GitHub handles, on the shipped
+Independent fittings from distinct GitHub handles, on the shipped
 integration, promotes it from untested to tested. Update the README with the
 models and handles.
 
