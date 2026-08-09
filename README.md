@@ -12,7 +12,7 @@ A **wig** is one JSON file holding one remote's codes, captured with [HAIR](http
 
 Anyone can generate an integration from a table of IR codes. The interesting question is whether the result actually drives the hardware, and a table cannot answer that.
 
-A wig can. Every wig that enters this factory carries a **fitting**: a per signal record that a named person pointed a blaster at the real device, pressed every button, and confirmed each one worked. The fitting is bound to a hash of the exact codes it tested and signed by the install that recorded it. Change a code afterward and the fitting stops matching.
+A wig can. Every wig that enters this factory is a **perfect fit**: somebody adopted it onto a real device, lived with it, and then claimed that every row of it worked on their own hardware. Each claim is bound to a digest of the exact signal it covers, including the repeat count and protocol handling that signal is sent with, and signed by the install that recorded it. Change a code afterward and its digest stops matching the claim that covered it.
 
 So the factory starts from evidence rather than from a spreadsheet. That is the whole premise.
 
@@ -36,6 +36,8 @@ Then open your coding agent in the repo root and hand it a wig by name:
 
 > Build an integration from `sanmli-candles-th05`.
 
+Files in the shop are named `<brand>-<kind>-<model>-perfect-fit.wig.json`. That suffix describes the file, not the device, so either spelling finds the wig and neither reaches the repository name: `fable-fan-ft-9000-perfect-fit.wig.json` publishes as `fable-fan-ft-9000-ir`.
+
 The agent reads `AGENTS.md` and works through it in order. Output lands in a folder named for the device.
 
 ---
@@ -56,7 +58,9 @@ Coverage is checked as a bijection: every signal in the wig has exactly one code
 
 Any mismatch fails the run before anything is published.
 
-It also counts contributors rather than strings. The GitHub handle on a fitting is free text somebody typed, so one account shows up as `dab`, `@dab`, `DAB` and `github.com/dab`. Compared raw, one person on two installs supplies two of the three fittings that promotion requires without meaning to deceive anyone. The gate compares a canonical form, counts only fittings that name a checkable account, and says plainly when two fittings collapse to one person.
+It also counts contributors rather than strings. The GitHub handle on a claim is free text somebody typed, so one account shows up as `dab`, `@dab`, `DAB` and `github.com/dab`. Compared raw, one person on two installs reads as two people without meaning to deceive anyone. The gate compares a canonical form, counts only claims that name a checkable account, and says plainly when two collapse to one person.
+
+That count is reported and never enforced. The shop has already established that the wig works for somebody, so the only question left is how many people, and that is a judgment at publish time rather than a threshold in a script.
 
 ```bash
 python3 verify/verify_wig.py \
@@ -84,13 +88,15 @@ One integration per device. The codebook is vendored inside it rather than publi
 
 ---
 
-## Tested and untested
+## What the shop guarantees, and what it does not
 
-Everything published here ships marked **untested by others**, carrying the fittings that came in with the wig. It graduates when independent people install it, confirm it drives their hardware, and say so.
+The [Wig Shop](https://github.com/DAB-LABS/WigShop) shelf admits perfect fits only. A wig lands when at least one person has claimed every row of it worked on their own hardware, so anything arriving here is already proven by somebody. What the shelf does not say is how many people, on how many units, in how many rooms. That is the number the factory reports.
 
-The bar for that graduation is three complete fittings from three distinct GitHub handles. Fittings accumulate in the [Wig Shop](https://github.com/DAB-LABS/WigShop), which is also where wigs come from in the first place.
+So everything published here ships marked **untested by others**, carrying the claims that came in with the wig. It earns a stronger statement when independent people install it, confirm it drives their hardware, and record that back in the shop.
 
-A generated integration's README carries the whole chain in plain text: which wig, which content hash, which handles fitted it and when, which HAIR version, and whether the self verification gate passed. If any of that is missing, the integration should not have been published.
+**A changed wig is a new wig.** The shop does not edit codes in place. A correction arrives as a fresh `wig_id` that names its ancestor in `supersedes`, and the file it replaces leaves the shelf under the same name. A published integration can therefore be built from a wig that no longer exists, with the filename unchanged, and only the id says so.
+
+A generated integration's README carries the whole chain in plain text: which wig, which `wig_id`, what that id supersedes, which accounts claimed it and when, which HAIR version, and whether the self verification gate passed. If any of that is missing, the integration should not have been published.
 
 ---
 
@@ -110,6 +116,6 @@ Generated codecs are written from protocol specifications only. No code derived 
 
 ## Questions
 
-Open an issue here for anything about the factory. Wigs and fittings live in the [Wig Shop](https://github.com/DAB-LABS/WigShop). HAIR itself has [its own tracker](https://github.com/DAB-LABS/HAIR/issues).
+Open an issue here for anything about the factory. Wigs and the claims made about them live in the [Wig Shop](https://github.com/DAB-LABS/WigShop). HAIR itself has [its own tracker](https://github.com/DAB-LABS/HAIR/issues).
 
 Thanks for proving things. 🍻
