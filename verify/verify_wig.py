@@ -60,11 +60,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_HAIR = REPO_ROOT / "reference" / "HAIR"
 DEFAULT_SHOP = REPO_ROOT / "reference" / "WigShop"
 
-# The standing promotion bar: three complete fittings from three distinct
-# GitHub accounts. Reported always; enforced only with --require-handles,
-# because the candle POC carries a written exemption and an exemption that
-# is applied silently is not an exemption.
-PROMOTION_HANDLES = 3
+# How many independent accounts the factory considers "widely proven", used
+# only to phrase the report. NOT a bar: the formal three-fittings rule was
+# retired on 2026-08-04, following HAIR retiring it from the format on
+# 2026-08-02. The shop admits perfect fits only, so arriving wigs are already
+# proven by somebody; how many people is a judgment, not a threshold.
+WIDELY_PROVEN_ACCOUNTS = 3
 
 # The bounds every reader clamps a send count to, matching HAIR's
 # const.MAX_SEND_COUNT. One frame is the floor because zero sends is not a
@@ -91,13 +92,25 @@ RECIPE_MAJOR = 3
 # to update it, rather than an AttributeError forty frames down. That is not
 # hypothetical: 0.9.5 removed ``wig_fitting.fitting_rows`` and every entry
 # point in this repo died on the traceback rather than refusing.
+# HAIR's comb check names, from wig_comb.py. Spelled out because the gate
+# reasons about WHICH classes it can independently reproduce, and a typo in a
+# string key would silently move a class into the "cannot see" bucket, which
+# reads as caution and is actually blindness.
+COMB_MALFORMED = "malformed"
+COMB_STRAY_BURST = "stray-burst"
+COMB_FRAME_SHAPE = "frame-shape"
+COMB_DUPLICATED_NEIGHBOUR = "duplicated-neighbour"
+COMB_MISSING_CELL = "missing-cell"
+
 REQUIRED_HAIR_API = {
     "wig_format": (
         "wig_row_digests", "signal_row_digest", "row_digest", "claims_of",
         "coverage", "perfect_by", "parse_claims_bundle", "is_claims_bundle",
-        "is_legacy_fitting", "wig_content_hash",
+        "is_legacy_fitting", "wig_content_hash", "cells_content_hash",
+        "cell_key",
     ),
     "wig_fitting": ("bundle_is_complete",),
+    "wig_climate": ("dimension_checklist",),
 }
 
 
@@ -148,81 +161,33 @@ def github_key(value: object) -> str | None:
     return text.strip().casefold() or None
 
 
-# ---------------------------------------------------------------------------
-# Exemptions
-# ---------------------------------------------------------------------------
+#: What HAIR names a download and therefore what lands in the shop:
+#: ``<brand>-<kind>-<model>-perfect-fit.wig.json``. The suffix records the
+#: fitting tier at the moment of download and is a courtesy to whoever has
+#: the file in their Downloads folder, nothing more. The shop never reads a
+#: tier from a filename either: claims are the evidence, and a name that
+#: could promote a file by being edited would defeat signed per-row claims.
+#:
+#: It must not reach a repository name. ``fable-fan-ft-9000-perfect-fit-ir``
+#: would bake a transient label into a slug, a domain, a config entry and a
+#: device registry entry, none of which can be changed later without taking
+#: somebody's install down. There is one tier now, so the stem underneath is
+#: stable and stripping it is safe.
+TIER_SUFFIXES = ("-perfect-fit",)
 
 
-@dataclass
-class Exemption:
-    """One written waiver of the promotion bar, for one wig."""
-
-    slug: str
-    reason: str
-    ruled_by: str
-    date: str
-    retires: str
-
-    def summary(self) -> str:
-        who = f" by {self.ruled_by}" if self.ruled_by else ""
-        when = f" on {self.date}" if self.date else ""
-        return f"exemption for {self.slug}, ruled{who}{when}"
-
-
-def _table_field(section: str, label: str) -> str:
-    """Pull a value out of a two-column markdown table row."""
-    for line in section.splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip().strip("*") for c in line.strip().strip("|").split("|")]
-        if len(cells) >= 2 and cells[0].casefold() == label.casefold():
-            return cells[1].strip()
-    return ""
-
-
-def _bold_paragraph(section: str, label: str) -> str:
-    """Pull the paragraph introduced by a bold run-in heading."""
-    marker = f"**{label}.**"
-    index = section.find(marker)
-    if index < 0:
-        return ""
-    rest = section[index + len(marker) :]
-    paragraph = rest.split("\n\n", 1)[0]
-    return " ".join(paragraph.split())
-
-
-def read_exemptions(path: Path) -> dict[str, Exemption]:
-    """Parse ``EXEMPTIONS.md`` into one entry per wig slug.
-
-    Deliberately forgiving about layout and deliberately strict about the
-    slug. An exemption covers exactly the wig named in its heading and never
-    generalizes, because the failure this whole mechanism guards against is a
-    waiver quietly becoming a policy.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    found: dict[str, Exemption] = {}
-    sections = text.split("\n## ")
-    for section in sections[1:]:
-        heading, _, body = section.partition("\n")
-        slug = heading.strip().strip("`").strip()
-        if not slug or " " in slug:
-            continue
-        found[slug.casefold()] = Exemption(
-            slug=slug,
-            reason=_bold_paragraph(body, "Reason"),
-            ruled_by=_table_field(body, "Ruled by"),
-            date=_table_field(body, "Date"),
-            retires=_table_field(body, "Retires when"),
-        )
-    return found
+def device_stem(name: str) -> str:
+    """The ``<brand>-<kind>-<model>`` part of a wig filename, tier removed."""
+    stem = Path(name).name.removesuffix(".json").removesuffix(".wig")
+    for suffix in TIER_SUFFIXES:
+        if stem.endswith(suffix) and stem != suffix:
+            return stem[: -len(suffix)]
+    return stem
 
 
 def wig_slug(wig_path: Path) -> str:
-    """The shop slug a wig file corresponds to."""
-    return wig_path.name.removesuffix(".json").removesuffix(".wig")
+    """The shop slug a wig file corresponds to, without its tier suffix."""
+    return device_stem(wig_path.name)
 
 
 # ---------------------------------------------------------------------------
@@ -391,11 +356,15 @@ def resolve_shop_wig(shop: Path, slug: str) -> tuple[Path | None, list[str]]:
     if not wigs_dir.is_dir():
         return None, []
     available = sorted(
-        p.name.removesuffix(".wig.json")
-        for p in wigs_dir.glob("*/*.wig.json")
+        device_stem(p.name) for p in wigs_dir.glob("*/*.wig.json")
     )
-    stem = slug.removesuffix(".wig.json").removesuffix(".json")
-    matches = sorted(wigs_dir.glob(f"*/{stem}.wig.json"))
+    # Matched on the DEVICE stem, not the literal filename, so somebody can
+    # name the device rather than remember which tier suffix the file landed
+    # with. Both spellings resolve to the same wig.
+    wanted = device_stem(slug)
+    matches = sorted(
+        p for p in wigs_dir.glob("*/*.wig.json") if device_stem(p.name) == wanted
+    )
     if len(matches) == 1:
         return matches[0], available
     return None, available
@@ -512,8 +481,6 @@ class Hair:
         except BaseException:  # noqa: BLE001 - reported by _require_api
             self.wig_fitting = None
 
-        self._require_api()
-
         # Matrix wigs. `wig_climate` owns the dimension checklist, which is
         # what a matrix fitting actually walks, and `cell_key` owns the key
         # format. Both are HAIR's to define, and the factory reading a lattice
@@ -526,6 +493,11 @@ class Hair:
             )
         except BaseException:  # noqa: BLE001
             self.wig_climate = None
+
+        # LAST. Every optional import has to have been attempted before the
+        # audit runs, or the audit reports a module that loads perfectly well
+        # as missing, which is a confident wrong answer.
+        self._require_api()
 
     def _require_api(self) -> None:
         """Refuse a HAIR checkout too old to answer the questions we ask.
@@ -626,6 +598,14 @@ class Hair:
         """The lattice hash a matrix bundle pins with ``cells_hash``."""
         return self.wig_format.cells_content_hash(matrix)
 
+    def dimension_checklist(self, matrix: Any) -> list[Any]:
+        """The deterministic sample of a lattice a fitter is actually shown."""
+        return self.wig_climate.dimension_checklist(matrix)
+
+    def row_digest(self, pronto: str, ditto: int = 0, bypass: bool = False) -> str:
+        """One row's digest from its parts, for rows that are not signals."""
+        return self.wig_format.row_digest(pronto, ditto, bypass)
+
 
 # ---------------------------------------------------------------------------
 # Results
@@ -665,7 +645,6 @@ def run_input_gate(
     wig_path: Path,
     report: Report,
     require_handles: int | None = None,
-    exemption: Exemption | None = None,
 ) -> Any | None:
     """Enforce the input contract. Returns the parsed wig, or None."""
     try:
@@ -694,6 +673,14 @@ def run_input_gate(
     report.facts["identifiers"] = dict(wig.identifiers or {})
     report.facts["signal_count"] = len(wig.signals)
     report.facts["hair_version"] = hair.version
+    # Ancestry (HAIR 0.9.7). Outside every canonical form and every digest,
+    # so it can never move an identity or disturb a claim. Recorded because a
+    # content change is now a NEW wig at the SAME filename, and this list is
+    # the only thing that distinguishes a legitimate successor from an
+    # unrelated wig that happens to be named the same.
+    ancestry = list(getattr(wig, "supersedes", []) or [])
+    if ancestry:
+        report.facts["supersedes"] = ancestry
     report.facts["shape"] = "matrix" if matrix is not None else "signals"
 
     aliases = [signal.alias for signal in wig.signals]
@@ -712,7 +699,7 @@ def run_input_gate(
     # _check_fittings meant its early return swallowed the check entirely.
     _check_recipe(hair, wig, report)
 
-    _check_fittings(hair, wig, report, require_handles, exemption)
+    _check_fittings(hair, wig, report, require_handles)
     return wig
 
 
@@ -730,12 +717,41 @@ def _verify_signature(hair: Hair, entry: dict[str, Any]) -> str | None:
         return "invalid"
 
 
+def matrix_checklist_digests(hair: Hair, wig: Any) -> set[str] | None:
+    """The dimension checklist a lattice implies, as row digests.
+
+    DERIVED HERE, NOT ASKED FOR, and that is the whole point. HAIR's
+    ``bundle_is_complete`` as shipped in 0.9.7 asks only "non-empty, and every
+    row in the bundle worked". It never re-derives what the lattice implies,
+    so a bundle that simply omits a dimension reads complete, and a ONE-ROW
+    bundle over a two-thousand-cell lattice reads complete. Silence is not a
+    claim.
+
+    Verified against the shipped source rather than assumed. HAIR's own fix is
+    queued, but files minted by 0.9.7 installs are already in the wild, so the
+    factory derives the answer instead of trusting the one it is given. The
+    Wig Shop's validator reached the same conclusion independently and this
+    mirrors its derivation exactly, down to the digest arguments: cells carry
+    no dittos and are never bypassed, so both are fixed rather than read.
+
+    Returns None when the checklist cannot be derived, which is a different
+    thing from an empty one and is never treated as passing.
+    """
+    matrix = getattr(wig, "climate", None)
+    if matrix is None:
+        return None
+    try:
+        items = hair.dimension_checklist(matrix)
+    except BaseException:  # noqa: BLE001 - a shape HAIR's walk cannot handle
+        return None
+    return {hair.row_digest(item.pronto, 0, False) for item in items}
+
+
 def _check_fittings(
     hair: Hair,
     wig: Any,
     report: Report,
     require_handles: int | None = None,
-    exemption: Exemption | None = None,
 ) -> None:
     """Fittings must exist, cover every row, bind to this wig, and verify.
 
@@ -766,8 +782,22 @@ def _check_fittings(
 
     matrix = getattr(wig, "climate", None)
     digests = hair.row_digests(wig)
+
+    # For a matrix the interesting number is the CHECKLIST, not the cell
+    # count. Nobody presses two thousand buttons; the checklist is what a
+    # fitter is actually shown and therefore what a claim can cover.
+    checklist = matrix_checklist_digests(hair, wig) if matrix is not None else None
+    if matrix is not None:
+        if checklist is None:
+            report.fail(
+                "this lattice's dimension checklist cannot be derived, so "
+                "there is no way to tell whether anybody walked it. A "
+                "checklist that cannot be computed is not an empty one."
+            )
+            return
+        report.facts["checklist_rows"] = len(checklist)
     report.facts["fitting_row_count"] = (
-        len(matrix.cells) if matrix is not None else len(digests)
+        len(checklist) if checklist is not None else len(digests)
     )
 
     complete: list[dict[str, Any]] = []
@@ -833,16 +863,33 @@ def _check_fittings(
                 f"claims still stand."
             )
 
-        if not hair.bundle_complete(bundle, wig, digests or None):
+        # NOT hair.bundle_complete for a matrix: see matrix_checklist_digests.
+        # A flat wig delegates to HAIR so the factory and the closet cannot
+        # disagree; a matrix wig is checked against the derived checklist,
+        # which is what the Wig Shop's shelf gate does.
+        if checklist is not None:
+            # The lattice this bundle walked was already pinned above, so what
+            # is left is whether the walk was covered. Both halves of the
+            # shop's bundle_is_perfect are therefore enforced, in the two
+            # places each belongs.
+            worked_digests = {
+                row.digest for row in bundle.rows
+                if row.verdict == hair.wig_format.VERDICT_WORKED
+            }
+            proven = checklist <= worked_digests
+        else:
+            proven = hair.bundle_complete(bundle, wig, digests or None)
+
+        if not proven:
             # Against the wig's CURRENT digests. Counting the bundle's own
             # worked rows instead reported "12 of 12 claimed as working" on a
             # wig whose codes had been edited underneath it, which is exactly
             # backwards: the claims are intact and the wig moved.
-            live = set(digests)
+            live = checklist if checklist is not None else set(digests)
             worked = sum(
                 1 for row in bundle.rows
                 if row.verdict == hair.wig_format.VERDICT_WORKED
-                and (matrix is not None or row.digest in live)
+                and row.digest in live
             )
             excluded = [
                 f"{row.alias_at_claim or row.digest} ({row.verdict})"
@@ -884,7 +931,7 @@ def _check_fittings(
         )
 
     # Pooled coverage, across every bundle including the incomplete ones. It
-    # answers a different question from the promotion bar and both are worth
+    # answers a different question from the account count and both are worth
     # printing: coverage can reach the full row count while nobody at all has
     # proven the whole wig, and three people who each proved a different
     # third have not, between them, produced one person who can vouch for it.
@@ -940,7 +987,7 @@ def _check_fittings(
         accounts.setdefault(account, []).append(display)
 
     report.facts["accounts"] = sorted(accounts)
-    report.facts["promotion_handles"] = len(accounts)
+    report.facts["independent_accounts"] = len(accounts)
     report.ok(
         f"{len(complete)} complete fitting(s) from {len(accounts)} distinct "
         f"GitHub account(s): {', '.join(sorted(accounts)) or 'none'}"
@@ -961,48 +1008,36 @@ def _check_fittings(
     if unattributed:
         report.note(
             f"{unattributed} complete fitting(s) carry no GitHub handle. They "
-            f"prove the wig works and do not count toward the promotion bar, "
+            f"prove the wig works and do not count toward the account total, "
             f"which counts checkable accounts."
         )
 
-    shortfall = None
-    if len(accounts) < PROMOTION_HANDLES:
-        shortfall = (
-            f"{len(accounts)} of {PROMOTION_HANDLES} distinct GitHub accounts. "
-            f"Below the standing promotion bar."
-        )
-    elif require_handles is not None and len(accounts) < require_handles:
-        shortfall = (
-            f"{len(accounts)} distinct GitHub accounts, {require_handles} "
+    # THE COUNT IS A REPORT, NOT A GATE (owner ruling 2026-08-04, following
+    # HAIR's "there is no promotion bar", ruled 2026-08-02).
+    #
+    # The formal three-accounts rule is retired. It was machinery in a place
+    # that should hold judgment: eligibility is a decision somebody makes
+    # while looking at accumulated claims, and a rule that can be waived by
+    # editing a file beside it was never really a rule. The Wig Shop reaching
+    # the same conclusion is what makes this safe rather than lax: its shelf
+    # now admits perfect fits only, so every wig arriving here already has at
+    # least one person who claimed every row on their own hardware. The
+    # question left is how MANY, and that is the owner's to weigh.
+    #
+    # So the gate reports and never refuses on this. --require-handles still
+    # works for anybody who wants a hard floor on a particular run.
+    if require_handles is not None and len(accounts) < require_handles:
+        report.fail(
+            f"{len(accounts)} distinct GitHub account(s), {require_handles} "
             f"required on this run."
         )
-
-    if shortfall is None:
-        pass
-    elif require_handles is None:
+    elif len(accounts) < WIDELY_PROVEN_ACCOUNTS:
         report.note(
-            shortfall + " Not enforced on this run; pass --require-handles "
-            f"{PROMOTION_HANDLES} to make it a gate."
+            f"{len(accounts)} of {WIDELY_PROVEN_ACCOUNTS} independent account(s). "
+            f"Not a bar: every wig on the shelf is already a perfect fit, so "
+            f"this is how widely proven it is, and whether that is enough is "
+            f"the owner's call at publish time."
         )
-    elif exemption is not None:
-        # The waiver is quoted into the output rather than merely honoured, so
-        # the published build's own log says out loud that it went out under
-        # one, and why. An exemption nobody can see in the artifact is the
-        # thing this mechanism exists to prevent.
-        report.facts["exemption"] = {
-            "slug": exemption.slug,
-            "ruled_by": exemption.ruled_by,
-            "date": exemption.date,
-            "retires": exemption.retires,
-        }
-        report.note(
-            f"{shortfall} WAIVED by a written {exemption.summary()}. "
-            f"Reason: {exemption.reason or 'none recorded'}"
-        )
-        if exemption.retires:
-            report.note(f"that exemption retires when: {exemption.retires}")
-    else:
-        report.fail(shortfall)
 
     # A shared signing key means one install, which is a different claim from
     # one person. Grouped by canonical account so it reports in the same terms
@@ -1020,7 +1055,7 @@ def _check_fittings(
             report.note(
                 f"accounts {', '.join(sorted(owners))} share signing key "
                 f"{fingerprint}, so they came from one install. Not a failure, "
-                f"but treat them as one contributor for promotion."
+                f"but they are one contributor when the accounts are counted."
             )
 
 
@@ -1169,11 +1204,23 @@ def check_comb(wig: Any, report: Report) -> None:
         "counts": dict(counts),
     }
 
-    # What this run found on its own, so the two can be compared rather than
-    # one being taken on faith.
-    ours = len(report.facts.get("lattice_defects") or []) + len(
-        (report.facts.get("frame_shape") or {}).get("malformed") or []
-    ) + len(report.facts.get("missing_cells") or [])
+    # What this run found on its own, per class, so the two can be compared
+    # rather than one being taken on faith.
+    #
+    # PER CLASS, not as one total, because the gate does not check everything
+    # the comb checks. Ramp dittos it never looks at; stray cells and
+    # coordinate collisions it does not currently reproduce. Comparing totals
+    # would let a class the gate cannot see cancel out a class it can, in
+    # either direction.
+    shape = report.facts.get("frame_shape") or {}
+    ours_by_class = {
+        COMB_DUPLICATED_NEIGHBOUR: len(report.facts.get("lattice_defects") or []),
+        COMB_MALFORMED: len(shape.get("malformed") or []),
+        COMB_FRAME_SHAPE: len(shape.get("malformed") or []),
+        COMB_STRAY_BURST: len(shape.get("noisy") or []),
+        COMB_MISSING_CELL: len(report.facts.get("missing_cells") or []),
+    }
+    ours = sum(ours_by_class.values())
 
     if suspects == 0:
         report.ok(f"combed{when}, no suspects recorded")
@@ -1188,9 +1235,48 @@ def check_comb(wig: Any, report: Report) -> None:
         return
 
     detail = "; ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
+
+    # THE REPAIRED CASE, and it has to come first. A receipt recording
+    # suspects on a lattice that no longer contains them is what a completed
+    # repair looks like: HAIR flagged the cells, minted a command row for each
+    # one, somebody pointed a remote at them and replaced the bad codes, and
+    # the wig arrived here clean. Printing "the comb found 8 suspects, that is
+    # the class that looks like it worked while landing on the wrong state"
+    # about that wig accuses somebody of the exact defect they just fixed by
+    # hand. It is also the first thing a successful repair would ever have
+    # seen from this gate.
+    #
+    # Only the classes this run can independently see count toward the
+    # judgment. A receipt whose remaining findings are all classes the gate
+    # does not reproduce gets the honest smaller sentence instead.
+    seen = {k: v for k, v in counts.items() if k in ours_by_class}
+    unseen = {k: v for k, v in counts.items() if k not in ours_by_class}
+    if seen and not ours:
+        healed = "; ".join(f"{k}: {v}" for k, v in sorted(seen.items()))
+        report.facts["comb"]["repaired"] = sum(seen.values())
+        report.facts["comb"]["unresolved"] = 0
+        report.ok(
+            f"combed{when}: {sum(seen.values())} suspect(s) recorded "
+            f"({healed}), none of which are still in this wig. That is what a "
+            f"completed repair looks like."
+        )
+        if unseen:
+            rest = "; ".join(f"{k}: {v}" for k, v in sorted(unseen.items()))
+            report.note(
+                f"the receipt also records {sum(unseen.values())} finding(s) "
+                f"in classes this gate does not reproduce ({rest}), so it can "
+                f"neither confirm nor clear those. Read the receipt."
+            )
+        return
+
+    still = "; ".join(
+        f"{k}: {v}" for k, v in sorted(seen.items()) if ours_by_class.get(k)
+    )
+    report.facts["comb"]["unresolved"] = ours
     report.note(
         f"the comb found {suspects} suspect(s){when}"
         + (f" ({detail})" if detail else "")
+        + (f", and this run still sees {still}" if still else "")
         + ". Read the receipt: combing sees things a fitting cannot, because "
         "a checklist samples dimensions rather than cells."
     )
@@ -1984,19 +2070,33 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
             print(f"  HAIR version:  {report.facts.get('hair_version', '?')}")
             if report.facts.get("shop_commit"):
                 print(
-                    f"  source:        WigShop@{report.facts['shop_commit']} "
+                    f"  source:        "
+                    f"WigShop@{str(report.facts['shop_commit'])[:7]} "
                     f"({report.facts.get('shop_date', '?')})"
                 )
             print(
-                f"  accounts:      {report.facts.get('promotion_handles', 0)} "
-                f"of {PROMOTION_HANDLES} for promotion"
+                f"  accounts:      "
+                f"{report.facts.get('independent_accounts', 0)} independent"
             )
+            if report.facts.get("supersedes"):
+                chain = report.facts["supersedes"]
+                print(
+                    f"  supersedes:    {chain[0]}"
+                    + (f" (+{len(chain) - 1} older)" if len(chain) > 1 else "")
+                )
             comb = report.facts.get("comb")
             if comb:
+                repaired = comb.get("repaired")
+                if repaired:
+                    state = (
+                        f"{repaired} suspect(s) recorded and none still "
+                        f"present"
+                    )
+                else:
+                    state = f"{comb.get('suspects')} suspect(s)"
                 print(
                     f"  combed:        {comb.get('date') or 'undated'}, "
-                    f"{comb.get('suspects')} suspect(s) "
-                    f"(receipt, not independently verified)"
+                    f"{state} (receipt, not independently verified)"
                 )
             else:
                 print("  combed:        no receipt")
@@ -2077,20 +2177,8 @@ def main(argv: list[str] | None = None) -> int:
         metavar="N",
         help=(
             "fail unless the wig carries complete fittings from N distinct "
-            "GitHub accounts. The standing promotion bar is "
-            f"{PROMOTION_HANDLES}; leave it off only where a written "
-            "exemption applies"
-        ),
-    )
-    parser.add_argument(
-        "--exemption",
-        type=Path,
-        metavar="FILE",
-        help=(
-            "a written waiver file, normally EXEMPTIONS.md. Used with "
-            "--require-handles: an entry naming this wig turns the handle "
-            "failure into a note that quotes the reason into the build "
-            "output. No matching entry and the gate still refuses"
+            "GitHub accounts. Off by default: the count is reported on every "
+            "run and whether it is enough is a publishing judgment"
         ),
     )
     parser.add_argument("--json", action="store_true", help="emit JSON instead")
@@ -2104,28 +2192,14 @@ def main(argv: list[str] | None = None) -> int:
         report.facts["shop_commit"] = provenance["sha"]
         report.facts["shop_date"] = provenance["date"]
 
-    exemption = None
-    if args.exemption is not None and wig_path is not None:
-        entries = read_exemptions(args.exemption)
-        if not entries:
-            report.note(
-                f"no exemptions could be read from {args.exemption}. The bar "
-                f"stands."
-            )
-        exemption = entries.get(wig_slug(wig_path).casefold())
-        if exemption is None and entries:
-            report.note(
-                f"{args.exemption} carries no entry for "
-                f"'{wig_slug(wig_path)}'. One wig's waiver never covers "
-                f"another, so the bar stands."
-            )
-
+    # OUTSIDE the provenance branch. A wig named by path carries no shop
+    # commit and must still be gated; nesting this cost the entire gate on
+    # every non-shop wig, silently, which is the worst shape a bug can take
+    # in a file whose job is refusing things.
     wig = None
     identities: dict[str, Any] = {}
     if wig_path is not None:
-        wig = run_input_gate(
-            hair, wig_path, report, args.require_handles, exemption
-        )
+        wig = run_input_gate(hair, wig_path, report, args.require_handles)
         identities = decode_wig(hair, wig, report) if wig is not None else {}
 
     if wig is not None and not args.gate_only:

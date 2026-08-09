@@ -5,9 +5,10 @@ The other tool creates. This one updates, and they are separate commands
 because their preconditions are opposites: creating refuses if the repository
 exists, updating refuses if it does not.
 
-Updating is the common case once a few integrations are out. A wig gets
-refitted, combed, or repaired; the send count moves; the stamp goes stale. The
-factory tree changes and that change has to reach the published repository
+Updating is the common case once a few integrations are out. More people
+claim a wig; the shop publishes a successor carrying a new `wig_id` at the
+same filename; the send count moves; the stamp goes stale. The factory tree
+changes and that change has to reach the published repository
 without anybody assembling git commands by hand, because assembling them by
 hand is the bottleneck a factory exists to remove.
 
@@ -43,7 +44,6 @@ from _common import (  # noqa: E402
     DEFAULT_HAIR,
     DEFAULT_SHOP,
     OWNER,
-    REPO_ROOT,
     GitHub,
     Refusal,
     git,
@@ -98,7 +98,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--integration", required=True, type=Path)
     parser.add_argument("--hair", type=Path, default=DEFAULT_HAIR)
     parser.add_argument("--shop", type=Path, default=DEFAULT_SHOP)
-    parser.add_argument("--exemption", type=Path, default=REPO_ROOT / "EXEMPTIONS.md")
     parser.add_argument("--repo", help="override the derived repository name")
     parser.add_argument("--branch", help="override the branch name")
     parser.add_argument(

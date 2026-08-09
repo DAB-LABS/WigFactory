@@ -26,9 +26,9 @@ so nothing was silently dropped or invented.
 is the security failure this project is most likely to actually have.** Not
 a token leak, not a supply chain attack. That.
 
-If you see a published integration whose README does not carry a content
-hash, a fitting record and a statement that the gate passed, treat it as
-unverified and say so in an issue.
+If you see a published integration whose README does not carry a `wig_id`, a
+record of who claimed the wig, and a statement that the gate passed, treat it
+as unverified and say so in an issue.
 
 ## What to report, and how
 
@@ -50,19 +50,28 @@ file, a repository name or a reference clone can cause code execution during
 a build, or can get something into a published artifact that nobody wrote,
 email rather than posting it.
 
-**A dishonest fitting chain.** Fittings from three handles that are really
-one person defeat the promotion bar. CI in the Wig Shop flags shared signing
-keys, which catches the lazy version of this and not the careful version.
-Report suspicions to the email above rather than in public, because the
-accusation is about a person.
+**A dishonest chain of claims.** There is no promotion bar left to defeat,
+but the account count an integration publishes is itself a claim about how
+widely a wig has been proven, and several handles that are really one person
+make that claim false. CI in the Wig Shop flags shared signing keys, which
+catches the lazy version of this and not the careful version. Report
+suspicions to the email above rather than in public, because the accusation
+is about a person.
+
+**A wig replaced underneath a published integration.** The shop corrects a
+wig by publishing a successor: a new `wig_id` naming its ancestor, landing at
+the same filename. An update path that follows the name without checking the
+id would rebuild an integration from codes nobody compared against the ones
+it shipped with. If you find a route where that happens quietly, it belongs
+in email rather than an issue.
 
 ## What signatures prove, and what they do not
 
-A fitting can carry an ed25519 signature made with a key generated on the
+A claim carries an ed25519 signature made with a key generated on the
 fitter's own HAIR install.
 
 It proves the record has not been altered since it was made on that install,
-and that fittings sharing a key came from one install. It does not prove who
+and that claims sharing a key came from one install. It does not prove who
 the fitter is. Nobody verified the handle, and the GitHub name is checkable
 only by asking that person.
 

@@ -17,9 +17,14 @@ Sorting:
 
   READY        passes the input gate and no integration exists yet
   BUILT        an integration already exists for this stem
-  FITTINGS     otherwise fine, below the promotion bar
   DEFECTS      the wig's own contents contradict themselves
-  UNUSABLE     will not parse, or carries no complete fitting at all
+  UNUSABLE     will not parse, or carries no complete claim at all
+
+There is deliberately no bucket for "not proven by enough people". The shop
+admits perfect fits only, so every wig here is already proven by somebody,
+and how many accounts vouch for it prints beside every row rather than
+sorting it into a pile. Whether a number is enough is a judgment at publish
+time.
 
 DEFECTS is the interesting bucket, and on converted files it is the biggest.
 A wig lands there when the gate found something wrong with the codes rather
@@ -40,20 +45,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verify_wig import (  # noqa: E402
     DEFAULT_HAIR,
     DEFAULT_SHOP,
-    PROMOTION_HANDLES,
     REPO_ROOT,
     Hair,
     Report,
     decode_wig,
-    read_exemptions,
     run_input_gate,
     shop_provenance,
     wig_slug,
 )
 
-# A failure mentioning any of these is about the paperwork rather than the
-# codes. Everything else that fails is a defect in the wig itself.
-_HANDLE_MARKERS = ("distinct GitHub accounts", "promotion bar")
 _UNUSABLE_MARKERS = (
     "does not parse",
     "carries no fitting",
@@ -84,34 +84,25 @@ def classify(report: Report, slug: str, built: set[str]) -> tuple[str, list[str]
     failures = report.failures
     if any(m in f for f in failures for m in _UNUSABLE_MARKERS):
         return "UNUSABLE", failures
-    defects = [
-        f
-        for f in failures
-        if not any(m in f for m in _HANDLE_MARKERS)
-    ]
-    if defects:
-        return "DEFECTS", defects
-    handles = [f for f in failures if any(m in f for m in _HANDLE_MARKERS)]
-    if handles:
-        return "FITTINGS", handles
+    # The survey never passes --require-handles, so nothing here can fail on
+    # the account count. Anything still failing is the wig contradicting
+    # itself.
+    if failures:
+        return "DEFECTS", failures
     if slug in built:
         return "BUILT", []
     return "READY", []
 
 
-def survey(
-    hair: Hair, shop: Path, root: Path, exemptions: Path | None
-) -> list[dict[str, Any]]:
+def survey(hair: Hair, shop: Path, root: Path) -> list[dict[str, Any]]:
     """Run the input gate over every wig in the shop clone."""
-    waivers = read_exemptions(exemptions) if exemptions else {}
     built = existing_builds(root)
     rows: list[dict[str, Any]] = []
     for path in sorted(shop.glob("wigs/*/*.wig.json")):
         slug = wig_slug(path)
         report = Report()
-        waiver = waivers.get(slug.casefold())
         try:
-            wig = run_input_gate(hair, path, report, PROMOTION_HANDLES, waiver)
+            wig = run_input_gate(hair, path, report)
             if wig is not None:
                 decode_wig(hair, wig, report)
         except BaseException as err:  # noqa: BLE001 - a survey never dies
@@ -129,14 +120,13 @@ def survey(
                     "cell_count", report.facts.get("signal_count")
                 ),
                 "protocol": report.facts.get("protocol"),
-                "accounts": report.facts.get("promotion_handles", 0),
+                "accounts": report.facts.get("independent_accounts", 0),
                 # Pooled row coverage (hair-wig/3). Distinct from the account
                 # count and worth seeing beside it: coverage can reach the
                 # full row count while nobody at all has proven the whole
                 # wig, which is the difference between "everything has been
                 # tried" and "somebody can vouch for it".
                 "coverage": report.facts.get("coverage"),
-                "waived": waiver is not None and bucket != "FITTINGS",
                 "bucket": bucket,
                 "why": why,
             }
@@ -144,7 +134,7 @@ def survey(
     return rows
 
 
-ORDER = ("READY", "FITTINGS", "DEFECTS", "UNUSABLE", "BUILT")
+ORDER = ("READY", "DEFECTS", "UNUSABLE", "BUILT")
 
 
 def print_survey(rows: list[dict[str, Any]], provenance: dict[str, str] | None) -> None:
@@ -159,7 +149,6 @@ def print_survey(rows: list[dict[str, Any]], provenance: dict[str, str] | None) 
         for r in here:
             shape = r["shape"] or "?"
             size = f"{r['rows']} {'cells' if shape == 'matrix' else 'signals'}"
-            waived = "  [waived]" if r["waived"] else ""
             cov = r.get("coverage") or {}
             covered = (
                 f"  {cov['covered']}/{cov['total']} rows" if cov else ""
@@ -167,7 +156,8 @@ def print_survey(rows: list[dict[str, Any]], provenance: dict[str, str] | None) 
             print(
                 f"   {r['slug']:34} {str(r['brand'] or '?'):12} "
                 f"{size:12} {str(r.get('protocol') or ''):10} "
-                f"{r['accounts']}/{PROMOTION_HANDLES}{covered}{waived}"
+                f"{r['accounts']} acct{'' if r['accounts'] == 1 else 's'}"
+                f"{covered}"
             )
             for line in r["why"][:3]:
                 print(f"        {line[:150]}")
@@ -187,12 +177,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hair", type=Path, default=DEFAULT_HAIR)
     parser.add_argument("--shop", type=Path, default=DEFAULT_SHOP)
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
-    parser.add_argument(
-        "--exemption",
-        type=Path,
-        default=REPO_ROOT / "EXEMPTIONS.md",
-        help="waiver file, so a waived wig sorts as ready rather than short",
-    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -202,12 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     hair = Hair(args.hair.resolve())
-    rows = survey(
-        hair,
-        shop,
-        args.root.resolve(),
-        args.exemption if args.exemption.is_file() else None,
-    )
+    rows = survey(hair, shop, args.root.resolve())
     provenance = shop_provenance(shop)
     if args.json:
         print(json.dumps({"shop": provenance, "wigs": rows}, indent=2))

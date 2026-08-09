@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "verify"))
 from verify_wig import (  # noqa: E402
     DEFAULT_HAIR,
     DEFAULT_SHOP,
-    PROMOTION_HANDLES,
     REPO_ROOT,
+    device_stem,
 )
 
 __all__ = [
@@ -35,7 +35,6 @@ __all__ = [
     "GitHub",
     "MEDIUM_SUFFIX",
     "OWNER",
-    "PROMOTION_HANDLES",
     "REPO_ROOT",
     "Refusal",
     "describe",
@@ -432,6 +431,16 @@ def provenance_lines(facts: dict[str, Any]) -> list[str]:
 
     lines = [
         f"Wig id {facts.get('wig_id') or 'none'}",
+    ]
+    # A wig that replaced another one says so, and a reader of the published
+    # repository has no other way to learn it: the successor lands at the same
+    # filename its ancestor had. Absent on a first-generation wig, and a line
+    # saying "supersedes nothing" would be noise on almost every build.
+    ancestry = facts.get("supersedes") or []
+    if ancestry:
+        older = f" (+{len(ancestry) - 1} older)" if len(ancestry) > 1 else ""
+        lines.append(f"Supersedes {ancestry[0]}{older}")
+    lines += [
         f"Content hash {facts.get('content_hash') or 'unknown'}",
         f"Wig Shop {str(facts.get('shop_commit') or 'unknown')[:7]}",
         recipe_line,
@@ -443,9 +452,7 @@ def provenance_lines(facts: dict[str, Any]) -> list[str]:
             f"pooled across every fitter"
         )
     lines.append(
-        f"Distinct accounts {facts.get('promotion_handles', 0)} of "
-        f"{PROMOTION_HANDLES}"
-        + (", waived by a written exemption" if facts.get("exemption") else "")
+        f"Independent accounts {facts.get('independent_accounts', 0)}"
     )
     lines.append(f"Verified against HAIR {facts.get('hair_version') or 'unknown'}")
     return lines
@@ -467,11 +474,8 @@ def run_the_gate(args: argparse.Namespace) -> dict[str, Any]:
         "--integration", str(args.integration),
         "--hair", str(args.hair),
         "--shop", str(args.shop),
-        "--require-handles", str(PROMOTION_HANDLES),
         "--json",
     ]
-    if args.exemption and Path(args.exemption).is_file():
-        command += ["--exemption", str(args.exemption)]
     result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
     try:
         payload = json.loads(result.stdout)
@@ -486,9 +490,14 @@ def run_the_gate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def repo_name_for(wig: str) -> str:
-    """The repository a wig becomes: its shop stem plus the medium."""
-    stem = Path(wig).name.removesuffix(".json").removesuffix(".wig")
-    return f"{stem}{MEDIUM_SUFFIX}"
+    """The repository a wig becomes: its device stem plus the medium.
+
+    The DEVICE stem, not the filename stem. Shop filenames carry a
+    ``-perfect-fit`` tier suffix that says what the fitting looked like at
+    the moment of download; a repository name is forever. See
+    ``verify_wig.TIER_SUFFIXES``.
+    """
+    return f"{device_stem(wig)}{MEDIUM_SUFFIX}"
 
 
 def git(repo: Path, *args: str) -> str:

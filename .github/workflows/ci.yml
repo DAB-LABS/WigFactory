@@ -115,11 +115,10 @@ jobs:
           for wig in reference/WigShop/wigs/*/*.wig.json; do
             found=1
             echo "::group::$(basename "$wig")"
-            # Not --require-handles: the promotion bar is a publishing
-            # decision the owner makes per build, and a shop full of
-            # honestly-short wigs is not a broken repository.
-            python verify/verify_wig.py --wig "$wig" --gate-only \
-              --exemption EXEMPTIONS.md
+            # No --require-handles: the account count is reported, never
+            # enforced. Whether a wig is proven widely enough to publish is a
+            # judgment the owner makes at publish time.
+            python verify/verify_wig.py --wig "$wig" --gate-only
             echo "::endgroup::"
           done
           if [ "$found" = "0" ]; then
@@ -175,7 +174,7 @@ jobs:
             found=1
             echo "::group::$slug"
             python verify/verify_wig.py --wig "$1" \
-              --integration "$integration" --exemption EXEMPTIONS.md
+              --integration "$integration"
             echo "::endgroup::"
           done
           if [ "$found" = "0" ]; then
