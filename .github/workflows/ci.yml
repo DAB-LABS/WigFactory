@@ -1,0 +1,183 @@
+name: CI
+
+# The repository whose whole job is gating other people's code had no gate on
+# its own. Two changes shipped in one evening carrying a dead constant, an
+# unused import and a stale fact name, and the only thing that caught any of
+# it was a person running ruff by hand.
+#
+# Nothing here is clever. It runs the same three commands a build actually
+# runs, on the two interpreters the gate actually supports.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # HAIR is somebody else's repository and it moves. A green run last Tuesday
+  # says nothing about today, and the failure mode is silent: the gate does
+  # not get quieter when HAIR changes, it gets wrong. Weekly, so drift shows
+  # up as a red X on a schedule rather than as a surprise mid-publish.
+  schedule:
+    - cron: "0 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      # The generated integration carries its own config and is linted by its
+      # own repository's workflow. Linting it here as well would mean two
+      # opinions about one file.
+      - name: Lint the factory's tooling
+        run: ruff check verify publish
+
+  gate:
+    name: Gate on ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the floor: HAIR's decoders use PEP 695 type parameters.
+        # 3.14 is what upstream infrared-protocols needs, and the two legs
+        # exercise genuinely different code. The environment marker in
+        # verify/requirements.txt is the thing that lets one file satisfy
+        # both, and it was unsatisfiable once already.
+        python: ["3.12", "3.14"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      # Deliberately at main rather than pinned. Pinning would make this pass
+      # forever while the real dependency moved underneath it, which is the
+      # exact failure this repository just lived through: HAIR 0.9.5 removed
+      # a function and every entry point here died on the traceback.
+      - name: Check out HAIR
+        uses: actions/checkout@v7
+        with:
+          repository: DAB-LABS/HAIR
+          path: reference/HAIR
+
+      - name: Check out the Wig Shop
+        uses: actions/checkout@v7
+        with:
+          repository: DAB-LABS/WigShop
+          path: reference/WigShop
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the verification dependencies
+        run: pip install -r verify/requirements.txt
+
+      - name: Say which decoders this leg has
+        run: |
+          python -c "import cryptography; print('cryptography', cryptography.__version__)"
+          python - <<'PY'
+          try:
+              import infrared_protocols
+              print("upstream infrared-protocols present")
+          except ImportError:
+              print("upstream absent, running on HAIR's own decoders")
+          PY
+
+      # The digest is a published contract and the factory reproduces it by
+      # calling HAIR rather than reimplementing it. This is what notices if
+      # either half of that stops being true.
+      - name: Recipe and digest parity
+        run: python verify/test_recipe.py --hair reference/HAIR
+
+      # Every wig in the shop, through the real input gate. Not a fixture: a
+      # fixture cannot tell you the shop published something the factory
+      # cannot read, and that is the interesting failure.
+      - name: Survey the shop
+        run: python verify/survey_shop.py
+
+      - name: Gate every wig the shop publishes
+        run: |
+          set -e
+          shopt -s nullglob
+          found=0
+          for wig in reference/WigShop/wigs/*/*.wig.json; do
+            found=1
+            echo "::group::$(basename "$wig")"
+            # Not --require-handles: the promotion bar is a publishing
+            # decision the owner makes per build, and a shop full of
+            # honestly-short wigs is not a broken repository.
+            python verify/verify_wig.py --wig "$wig" --gate-only \
+              --exemption EXEMPTIONS.md
+            echo "::endgroup::"
+          done
+          if [ "$found" = "0" ]; then
+            echo "No wigs found in the shop clone. That is not a pass."
+            exit 1
+          fi
+
+  built:
+    name: Built integrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Check out HAIR
+        uses: actions/checkout@v7
+        with:
+          repository: DAB-LABS/HAIR
+          path: reference/HAIR
+
+      - name: Check out the Wig Shop
+        uses: actions/checkout@v7
+        with:
+          repository: DAB-LABS/WigShop
+          path: reference/WigShop
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install the verification dependencies
+        run: pip install -r verify/requirements.txt
+
+      # The full gate, codec checks included, against every integration this
+      # repository has already built. This is the leg that would have caught
+      # the candle shipping without its ditto.
+      - name: Verify each built integration against its wig
+        run: |
+          set -e
+          shopt -s nullglob
+          found=0
+          for codes in */*/custom_components/*/codes.py; do
+            integration="$(dirname "$(dirname "$(dirname "$codes")")")"
+            slug="$(basename "$(dirname "$integration")")"
+            wig="reference/WigShop/wigs"/*/"$slug.wig.json"
+            # shellcheck disable=SC2086
+            set -- $wig
+            if [ ! -f "$1" ]; then
+              echo "No shop wig named $slug.wig.json; skipping $integration"
+              continue
+            fi
+            found=1
+            echo "::group::$slug"
+            python verify/verify_wig.py --wig "$1" \
+              --integration "$integration" --exemption EXEMPTIONS.md
+            echo "::endgroup::"
+          done
+          if [ "$found" = "0" ]; then
+            echo "No built integration matched a shop wig."
+          fi

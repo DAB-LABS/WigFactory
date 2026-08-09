@@ -309,8 +309,10 @@ class GitHub:
             if pending:
                 time.sleep(10)
                 continue
+            passing = ("success", "skipped", "neutral")
             failed = [
-                r["name"] for r in runs if r.get("conclusion") not in ("success", "skipped", "neutral")
+                r["name"] for r in runs
+                if r.get("conclusion") not in passing
             ]
             if failed:
                 return False, f"{', '.join(sorted(set(failed)))} did not pass"

@@ -1,0 +1,25 @@
+# Lint for the factory's own tooling.
+#
+# Deliberately NOT the same config as a generated integration. That one exists
+# to match Home Assistant core, docstring conventions and all, because the code
+# it governs is shipped as an HA component and read alongside core's. This
+# governs verify/ and publish/, which are scripts run from a terminal by one
+# person. Holding them to D401's imperative-mood rule produced 20 findings and
+# zero insight.
+#
+# What is selected is the set that catches real mistakes: undefined names,
+# unused imports, shadowed builtins, mutable defaults, un-sorted imports,
+# comprehension and return-path sloppiness. The docstrings in here are long and
+# argumentative on purpose; a linter has no useful opinion about them.
+target-version = "py312"
+line-length = 88
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET"]
+
+[lint.per-file-ignores]
+# Both entry points insert their own directory on sys.path before importing a
+# sibling, which is the only way a script run by absolute path can find one.
+# E402 is the rule against exactly that, and it is wrong here.
+"publish/*.py" = ["E402"]
+"verify/*.py" = ["E402"]

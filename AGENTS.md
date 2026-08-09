@@ -52,6 +52,30 @@ These apply to everything you write here.
 
 ---
 
+### What CI checks, and what it does not
+
+`.github/workflows/ci.yml` runs ruff over `verify/` and `publish/`, the recipe
+and digest parity vectors, and the real input gate over every wig the shop
+publishes, on Python 3.12 and 3.14. A fourth job runs the FULL gate, codec
+checks included, against every integration already built here.
+
+**It checks out HAIR at `main`, deliberately unpinned, and runs weekly on a
+schedule.** Pinning would let this pass forever while the thing it depends on
+moved underneath it, which is exactly what happened when 0.9.5 removed
+`fitting_rows`: nothing went red, the gate simply started dying on a
+traceback. A red X on a Monday morning saying HAIR moved is the point.
+
+So a CI failure here has two possible meanings and the message tells you
+which: your change broke something, or somebody else's repository changed and
+this one has not caught up yet. Both are worth knowing and neither should be
+silenced by pinning.
+
+CI does not enforce `--require-handles`. The promotion bar is a publishing
+decision the owner makes per build, and a shop full of honestly-short wigs is
+not a broken repository.
+
+---
+
 ## 1. Fetch the references
 
 ```bash
