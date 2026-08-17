@@ -1587,10 +1587,13 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
     protocols: set[str] = set()
     addresses: set[int] = set()
 
+    undecoded: list[str] = []
+
     for signal in wig.signals:
         raw = hair.timings_from_pronto(signal.pronto)
         if raw is None:
             report.fail(f"signal '{signal.alias}': Pronto does not convert to timings")
+            undecoded.append(signal.alias)
             continue
         identity = hair.identity(raw)
         if identity is None:
@@ -1598,10 +1601,16 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
                 f"signal '{signal.alias}': does not decode to any known protocol. "
                 f"There is nothing to generate a codec from."
             )
+            undecoded.append(signal.alias)
             continue
         identities[signal.alias] = identity
         protocols.add(identity.protocol)
         addresses.add(identity.address)
+
+    # signal_count is already recorded by the input gate; only the decoded
+    # tally is new here, and the two being different is the whole point.
+    total = len(wig.signals)
+    report.facts["decoded_count"] = len(identities)
 
     if len(protocols) > 1:
         report.fail(
@@ -1612,10 +1621,23 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
         protocol = next(iter(protocols))
         report.facts["protocol"] = protocol
         source = next(iter(identities.values())).source
-        report.ok(
-            f"all {len(identities)} signal(s) decode as {protocol} "
-            f"(decoder source: {source})"
-        )
+        # COUNT AGAINST THE WIG, NOT AGAINST THE SURVIVORS. Signals that fail
+        # to decode fall out of `identities`, so counting that dict said "all
+        # 6 signal(s) decode as SYMPHONY12" about a seven-signal wig with an
+        # undecodable row, three lines above the failure saying so. A reader
+        # skimming for the word "all" would have believed the wig was clean.
+        # Same defect as reporting a bundle's own rows as the coverage total.
+        if undecoded:
+            report.note(
+                f"{len(identities)} of {total} signal(s) decode as {protocol} "
+                f"(decoder source: {source}). {len(undecoded)} did not: "
+                f"{', '.join(undecoded)}."
+            )
+        else:
+            report.ok(
+                f"all {total} signal(s) decode as {protocol} "
+                f"(decoder source: {source})"
+            )
 
     if len(addresses) > 1:
         report.fail(

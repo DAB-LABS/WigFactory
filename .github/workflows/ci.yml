@@ -107,24 +107,43 @@ jobs:
       - name: Survey the shop
         run: python verify/survey_shop.py
 
+      # EVERY wig, then decide. Deliberately not `set -e`: this job is a
+      # survey of the shop, and a survey that stops at the first bad answer
+      # is not one. The Dreo fan refused on 2026-08-17 and took the whole
+      # sweep down with it, so nothing after it in the glob was gated at all
+      # and the run reported one problem where it had not looked for a
+      # second.
       - name: Gate every wig the shop publishes
         run: |
-          set -e
           shopt -s nullglob
           found=0
+          refused=()
           for wig in reference/WigShop/wigs/*/*.wig.json; do
             found=1
-            echo "::group::$(basename "$wig")"
+            name="$(basename "$wig")"
+            echo "::group::$name"
             # No --require-handles: the account count is reported, never
             # enforced. Whether a wig is proven widely enough to publish is a
             # judgment the owner makes at publish time.
-            python verify/verify_wig.py --wig "$wig" --gate-only
+            if ! python verify/verify_wig.py --wig "$wig" --gate-only; then
+              refused+=("$name")
+            fi
             echo "::endgroup::"
           done
           if [ "$found" = "0" ]; then
             echo "No wigs found in the shop clone. That is not a pass."
             exit 1
           fi
+          if [ "${#refused[@]}" -gt 0 ]; then
+            echo
+            echo "${#refused[@]} wig(s) the factory cannot build from:"
+            for name in "${refused[@]}"; do
+              echo "  $name"
+              echo "::error title=Gate refused $name::See the $name group above"
+            done
+            exit 1
+          fi
+          echo "Every wig in the shop passes the input gate."
 
   built:
     name: Built integrations
