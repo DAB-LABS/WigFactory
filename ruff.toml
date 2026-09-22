@@ -11,7 +11,7 @@
 # unused imports, shadowed builtins, mutable defaults, un-sorted imports,
 # comprehension and return-path sloppiness. The docstrings in here are long and
 # argumentative on purpose; a linter has no useful opinion about them.
-target-version = "py312"
+target-version = "py313"
 line-length = 88
 
 [lint]

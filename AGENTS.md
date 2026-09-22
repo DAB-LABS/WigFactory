@@ -56,19 +56,37 @@ These apply to everything you write here.
 
 `.github/workflows/ci.yml` runs ruff over `verify/` and `publish/`, the recipe
 and digest parity vectors, and the real input gate over every wig the shop
-publishes, on Python 3.12 and 3.14. A fourth job runs the FULL gate, codec
+publishes, on Python 3.13 and 3.14. A fourth job runs the FULL gate, codec
 checks included, against every integration already built here.
 
-**It checks out HAIR at `main`, deliberately unpinned, and runs weekly on a
-schedule.** Pinning would let this pass forever while the thing it depends on
-moved underneath it, which is exactly what happened when 0.9.5 removed
-`fitting_rows`: nothing went red, the gate simply started dying on a
-traceback. A red X on a Monday morning saying HAIR moved is the point.
+**HAIR is pinned, except once a week.** `verify/HAIR_REF` names the HAIR
+release the gate judges against, and it is the one place the pin lives:
+`setup.sh` reads the same file. A wig should be judged by a HAIR that does
+not move underneath it. The weekly scheduled run is the exception: it checks
+out HAIR at `main`, so a stale pin shows up as a red X on a Monday morning
+rather than as a surprise mid-publish. That run exists because of 0.9.5,
+which removed `fitting_rows`: nothing went red, the gate simply started
+dying on a traceback.
 
-So a CI failure here has two possible meanings and the message tells you
-which: your change broke something, or somebody else's repository changed and
-this one has not caught up yet. Both are worth knowing and neither should be
-silenced by pinning.
+The pin is deliberately ours rather than the Wig Shop's. The shop pins its
+own `HAIR_REF` for its own checks. Ours has to be at least 0.14.2, where HAIR
+started reporting whether a decoded label accounts for its whole capture,
+because the factory rebuilds codes from labels. Bump it by hand in a pull
+request, one line.
+
+**Two kinds of red, and they must never look alike.** The gate exits 1 when
+it refuses a wig and 3 when it reached no verdict at all: HAIR missing or too
+old, a dependency not installed, or the gate itself crashing. Our own faults
+(lint, parity, a crash, a built integration failing its gate) are red on
+every event. A wig on the shelf the factory cannot build from is a true
+statement about somebody else's repository, so it annotates on push and pull
+request and goes red only on the weekly run. Otherwise one bad wig on the
+shelf would turn every pull request here red until somebody else fixed it.
+
+That split is not decoration. From 24 August to 22 September 2026 every
+weekly run died on a missing dependency (PyYAML, needed by HAIR's comb since
+0.12.0) before it gated a single wig, and it looked exactly like the red X a
+bad wig produces. Nobody read it.
 
 CI does not pass `--require-handles`. The account count is reported, never
 enforced, and whether a wig is proven widely enough to publish is a judgment
@@ -93,26 +111,19 @@ This shallow clones into `reference/`:
 | `reference/integration_blueprint` | ludeeus's HACS scaffold | Repository level furniture: workflows, `hacs.json`, gitignore |
 
 `setup.sh` also builds the verification environment: it finds the newest
-Python 3.12 or later on the machine, creates `.venv`, and installs
-`verify/requirements.txt`. **3.12 is a hard floor**, because HAIR's decoders
-use PEP 695 type parameters and the gate imports them directly. If setup
-reports no suitable interpreter, install one and run it again; it will not
-guess and it will not silently skip the gate.
+Python 3.13 or later on the machine, creates `.venv`, and installs
+`verify/requirements.txt`. **3.13 is a hard floor**, matching HAIR's own
+`requires-python`. If setup reports no suitable interpreter, install one and
+run it again; it will not guess and it will not silently skip the gate.
 
-**There is a second floor, and it is softer.** Upstream `infrared-protocols`
-8.2.1 requires Python 3.14 or newer, which is why Home Assistant runs 3.14.
-Below that it cannot be installed, so a 3.12 or 3.13 environment runs the
-gate on HAIR's own decoders alone: workable, and a smaller protocol set, with
-no local polyfill for NEC, and none for GE air conditioners either: those
-are the only two protocols in HAIR's registry with no local fallback, so
-without upstream the registry drops them entirely and the gate refuses those
-wigs as undecodable. NEC is the most common consumer protocol there is, so
-this matters the moment a television wig arrives. `setup.sh` says which set
-you have. The
-requirement carries an environment marker so pip skips it cleanly rather
-than failing, because a requirements file resolves as one transaction and an
-unsatisfiable line otherwise takes `cryptography` down with it, leaving a
-venv that cannot verify a single signature.
+**Upstream `infrared-protocols` is required, not optional.** HAIR has no
+local decoder for NEC, the most common consumer protocol there is, so
+without upstream every NEC wig reads "does not decode to any known protocol".
+That is a false statement about a good wig, and it happened: the Winix 5500
+refused on 3.12 and passed on 3.14. The gate now refuses to start without
+upstream rather than report an environment problem as a wig defect. The
+range in `requirements.txt` is HAIR's own, and it resolves to 5.x on 3.13 and
+8.x on 3.14; CI runs both, and the gate records which one it used.
 
 **`setup.sh` never runs itself.** There is no timer, no daemon and no
 auto-update. You run it, it fetches and hard resets every clone to its
