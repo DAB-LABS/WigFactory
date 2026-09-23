@@ -49,6 +49,7 @@ from verify_wig import (  # noqa: E402
     Hair,
     Report,
     decode_wig,
+    environment_exit,
     run_input_gate,
     shop_provenance,
     wig_slug,
@@ -182,8 +183,9 @@ def main(argv: list[str] | None = None) -> int:
 
     shop = args.shop.resolve()
     if not shop.is_dir():
-        print(f"no Wig Shop clone at {shop}. Run ./setup.sh first.")
-        return 1
+        raise environment_exit(
+            f"no Wig Shop clone at {shop}. Run ./setup.sh first."
+        )
 
     hair = Hair(args.hair.resolve())
     rows = survey(hair, shop, args.root.resolve())

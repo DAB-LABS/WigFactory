@@ -454,7 +454,11 @@ def provenance_lines(facts: dict[str, Any]) -> list[str]:
     lines.append(
         f"Independent accounts {facts.get('independent_accounts', 0)}"
     )
-    lines.append(f"Verified against HAIR {facts.get('hair_version') or 'unknown'}")
+    upstream = facts.get("infrared_protocols")
+    lines.append(
+        f"Verified against HAIR {facts.get('hair_version') or 'unknown'}"
+        + (f" with infrared-protocols {upstream}" if upstream else "")
+    )
     return lines
 
 

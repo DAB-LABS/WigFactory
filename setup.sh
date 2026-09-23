@@ -29,6 +29,25 @@ clone_or_update() {
     fi
 }
 
+# clone_or_update_ref <url> <directory> <ref>
+#
+# Like clone_or_update, but <ref> may be a tag. A tag has no origin/<tag>
+# tracking branch to reset to, so this checks out whatever the fetch brought
+# back, detached. Used for HAIR, which the gate reads at a pinned release.
+clone_or_update_ref() {
+    local url="$1" dir="$2" ref="$3"
+    local path="$REF_DIR/$dir"
+
+    if [ -d "$path/.git" ]; then
+        echo "Updating $dir to $ref"
+        git -C "$path" fetch --depth 1 origin "$ref"
+        git -C "$path" checkout -q --detach FETCH_HEAD
+    else
+        echo "Cloning $dir at $ref"
+        git clone --depth 1 --branch "$ref" "$url" "$path"
+    fi
+}
+
 # Home Assistant core is enormous and we want four directories out of it.
 # Sparse checkout with a blobless filter keeps this to seconds rather than
 # minutes. If the local git is too old for --sparse, fall back to a plain
@@ -61,8 +80,13 @@ clone_or_update_core() {
     fi
 }
 
-clone_or_update https://github.com/DAB-LABS/HAIR.git \
-    HAIR main
+# HAIR is pinned to a release, read from verify/HAIR_REF, which is the same
+# file CI reads. A wig should be judged by a HAIR that does not move under it
+# halfway through a build. HAIR_REF=main ./setup.sh overrides it, for anybody
+# deliberately working against unreleased HAIR.
+HAIR_REF="${HAIR_REF:-$(tr -d '[:space:]' < "$(dirname "${BASH_SOURCE[0]}")/verify/HAIR_REF")}"
+clone_or_update_ref https://github.com/DAB-LABS/HAIR.git \
+    HAIR "$HAIR_REF"
 clone_or_update https://github.com/DAB-LABS/WigShop.git \
     WigShop main
 clone_or_update https://github.com/home-assistant-libs/infrared-protocols.git \
@@ -103,15 +127,16 @@ fi
 
 # The verification environment.
 #
-# HAIR's decoders use 3.12+ syntax (PEP 695 type parameters), so that is the
-# floor. Anything newer is fine and newest is preferred. Naming one exact
-# interpreter here was a mistake: python3.13 is not on every machine that has
-# a perfectly good python3.14.
+# 3.13 is the floor, matching HAIR's own requires-python. Below it the
+# upstream decoders cannot be installed, and without them NEC does not decode
+# at all. Anything newer is fine and newest is preferred. Naming one exact
+# interpreter here was a mistake once already: not every machine with a
+# perfectly good python3.14 also has python3.13.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY=""
-for candidate in python3.15 python3.14 python3.13 python3.12 python3; do
+for candidate in python3.15 python3.14 python3.13 python3; do
     if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c \
-        'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' \
+        'import sys; sys.exit(0 if sys.version_info >= (3, 13) else 1)' \
         >/dev/null 2>&1; then
         PY="$candidate"
         break
@@ -120,8 +145,8 @@ done
 
 echo
 if [ -z "$PY" ]; then
-    echo "No Python 3.12 or newer found, so the verification environment was"
-    echo "not created. HAIR's decoders need 3.12+ and the gate imports them."
+    echo "No Python 3.13 or newer found, so the verification environment was"
+    echo "not created. HAIR requires 3.13+ and the gate imports it directly."
     echo "On macOS:  brew install python@3.14"
     echo "Then re-run ./setup.sh."
     exit 0
@@ -132,23 +157,25 @@ echo "Using $($PY --version) for the verification environment."
 "$REPO_ROOT/.venv/bin/pip" install --quiet --upgrade pip
 if ! "$REPO_ROOT/.venv/bin/pip" install --quiet -r "$REPO_ROOT/verify/requirements.txt"; then
     echo
-    echo "The verification dependencies did not install. The gate needs"
-    echo "cryptography to check fitting signatures and reports invalid"
-    echo "without it, so do not run a build until this is fixed."
+    echo "The verification dependencies did not install. The gate will not"
+    echo "start without them, so do not run a build until this is fixed."
     exit 1
 fi
 
-# Say which protocol set the gate will have. Upstream ships decoders for a
-# few protocols and encoders for many; where it decodes, HAIR prefers it.
-# Where it is absent the gate falls back to HAIR's own decoders, which is
-# workable and narrower, and worth knowing before a run rather than after.
-if "$REPO_ROOT/.venv/bin/python" -c 'import infrared_protocols' 2>/dev/null; then
-    echo "Upstream infrared-protocols is present."
-else
-    echo "Upstream infrared-protocols is NOT present: it needs Python 3.14"
-    echo "or newer and this environment is $($PY --version | cut -d' ' -f2)."
-    echo "The gate falls back to HAIR's own decoders, which covers less."
+# Say which versions the gate will run with. Upstream infrared-protocols is
+# required: HAIR has no local NEC decoder, and without it good NEC wigs read
+# as undecodable. The gate refuses to start without it, so say so here first.
+if ! "$REPO_ROOT/.venv/bin/python" -c 'import infrared_protocols' 2>/dev/null; then
+    echo
+    echo "Upstream infrared-protocols did not install, so the gate will not"
+    echo "start. It needs Python 3.13 or newer."
+    exit 1
 fi
+"$REPO_ROOT/.venv/bin/python" -c '
+import importlib.metadata as m
+for name in ("cryptography", "pyyaml", "infrared-protocols"):
+    print(f"  {name:20} {m.version(name)}")
+'
 
 echo
 echo "Ready. Verify a wig with:"

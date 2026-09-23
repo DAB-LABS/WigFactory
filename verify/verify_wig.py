@@ -47,6 +47,7 @@ import argparse
 import ast
 import collections
 import importlib
+import importlib.metadata
 import importlib.util
 import json
 import sys
@@ -112,6 +113,28 @@ REQUIRED_HAIR_API = {
     "wig_fitting": ("bundle_is_complete",),
     "wig_climate": ("dimension_checklist",),
 }
+
+# How the gate exits, so a caller can tell a verdict from a breakdown.
+#
+# REFUSED is a judgment about somebody else's data: this wig cannot be built
+# from. ENVIRONMENT means no judgment was reached at all, because the HAIR
+# checkout is missing or too old, a dependency is not installed, or the gate
+# itself crashed. CI treats the two differently and has to be able to, because
+# on 2026-08-17 a wig refusal and a factory bug were the same red X, and for a
+# month after that a missing dependency hid behind the same colour as a bad wig.
+EXIT_PASSED = 0
+EXIT_REFUSED = 1
+EXIT_ENVIRONMENT = 3
+
+
+def environment_exit(message: str) -> SystemExit:
+    """Say why no verdict was reached, and return the exit to raise.
+
+    Printed here rather than carried on the exception, because a SystemExit
+    with an integer code exits silently and the message is the useful part.
+    """
+    print(f"no verdict: {message}", file=sys.stderr)
+    return SystemExit(EXIT_ENVIRONMENT)
 
 
 # ---------------------------------------------------------------------------
@@ -442,10 +465,31 @@ class Hair:
         pkg_root = hair_root / "custom_components"
         hair_pkg = pkg_root / "hair"
         if not (hair_pkg / "protocol_decode.py").is_file():
-            raise SystemExit(
+            raise environment_exit(
                 f"HAIR not found at {hair_root}. Run ./setup.sh first, or "
                 f"pass --hair with the path to a HAIR checkout."
             )
+
+        # Upstream decoders are REQUIRED, not a smaller-but-workable mode.
+        # HAIR has no local decoder for NEC, the most common consumer
+        # protocol there is, so without upstream every NEC wig reads "does
+        # not decode to any known protocol". That is a false statement about
+        # a good wig, and it happened: on 2026-09-22 the Winix 5500 refused
+        # on Python 3.12, where upstream cannot be installed, and passed on
+        # 3.14. An environment problem must not be reported as a wig defect.
+        try:
+            self.upstream_version: str = importlib.metadata.version(
+                "infrared-protocols"
+            )
+            importlib.import_module("infrared_protocols")
+        except Exception as err:  # noqa: BLE001 - any failure means absent
+            raise environment_exit(
+                f"upstream infrared-protocols is not importable ({err!r}). "
+                f"HAIR has no local decoder for NEC and several other "
+                f"protocols, so without it good wigs would be reported as "
+                f"undecodable. Install verify/requirements.txt on Python 3.13 "
+                f"or newer (./setup.sh does this)."
+            ) from None
 
         for name, path in (
             ("custom_components", pkg_root),
@@ -522,7 +566,7 @@ class Hair:
             ]
         if not missing:
             return
-        raise SystemExit(
+        raise environment_exit(
             f"the HAIR checkout at {self.root} is version {self.version} and "
             f"does not provide: {', '.join(missing)}.\n"
             f"The factory reads the hair-wig/{RECIPE_MAJOR} claims model, "
@@ -673,6 +717,7 @@ def run_input_gate(
     report.facts["identifiers"] = dict(wig.identifiers or {})
     report.facts["signal_count"] = len(wig.signals)
     report.facts["hair_version"] = hair.version
+    report.facts["infrared_protocols"] = hair.upstream_version
     # Ancestry (HAIR 0.9.7). Outside every canonical form and every digest,
     # so it can never move an identity or disturb a claim. Recorded because a
     # content change is now a NEW wig at the SAME filename, and this list is
@@ -1587,10 +1632,13 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
     protocols: set[str] = set()
     addresses: set[int] = set()
 
+    undecoded: list[str] = []
+
     for signal in wig.signals:
         raw = hair.timings_from_pronto(signal.pronto)
         if raw is None:
             report.fail(f"signal '{signal.alias}': Pronto does not convert to timings")
+            undecoded.append(signal.alias)
             continue
         identity = hair.identity(raw)
         if identity is None:
@@ -1598,10 +1646,16 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
                 f"signal '{signal.alias}': does not decode to any known protocol. "
                 f"There is nothing to generate a codec from."
             )
+            undecoded.append(signal.alias)
             continue
         identities[signal.alias] = identity
         protocols.add(identity.protocol)
         addresses.add(identity.address)
+
+    # signal_count is already recorded by the input gate; only the decoded
+    # tally is new here, and the two being different is the whole point.
+    total = len(wig.signals)
+    report.facts["decoded_count"] = len(identities)
 
     if len(protocols) > 1:
         report.fail(
@@ -1612,10 +1666,23 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
         protocol = next(iter(protocols))
         report.facts["protocol"] = protocol
         source = next(iter(identities.values())).source
-        report.ok(
-            f"all {len(identities)} signal(s) decode as {protocol} "
-            f"(decoder source: {source})"
-        )
+        # COUNT AGAINST THE WIG, NOT AGAINST THE SURVIVORS. Signals that fail
+        # to decode fall out of `identities`, so counting that dict said "all
+        # 6 signal(s) decode as SYMPHONY12" about a seven-signal wig with an
+        # undecodable row, three lines above the failure saying so. A reader
+        # skimming for the word "all" would have believed the wig was clean.
+        # Same defect as reporting a bundle's own rows as the coverage total.
+        if undecoded:
+            report.note(
+                f"{len(identities)} of {total} signal(s) decode as {protocol} "
+                f"(decoder source: {source}). {len(undecoded)} did not: "
+                f"{', '.join(undecoded)}."
+            )
+        else:
+            report.ok(
+                f"all {total} signal(s) decode as {protocol} "
+                f"(decoder source: {source})"
+            )
 
     if len(addresses) > 1:
         report.fail(
@@ -2068,6 +2135,10 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
             print(f"  protocol:      {report.facts.get('protocol', '?')}")
             print(f"  address:       {report.facts.get('address', '?')}")
             print(f"  HAIR version:  {report.facts.get('hair_version', '?')}")
+            print(
+                f"  upstream:      infrared-protocols "
+                f"{report.facts.get('infrared_protocols', '?')}"
+            )
             if report.facts.get("shop_commit"):
                 print(
                     f"  source:        "
@@ -2245,8 +2316,21 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print_report(report, wig_path or Path(str(args.wig)), args.integration)
 
-    return 0 if report.passed else 1
+    return EXIT_PASSED if report.passed else EXIT_REFUSED
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception:  # noqa: BLE001 - reported, and exits distinctly
+        # A crash is a factory bug, never a finding about the wig, and it has
+        # to exit differently from a refusal or CI cannot tell them apart.
+        import traceback
+
+        traceback.print_exc()
+        raise environment_exit(
+            "the gate crashed before reaching a verdict. That is a bug in the "
+            "factory, not a finding about the wig."
+        ) from None
