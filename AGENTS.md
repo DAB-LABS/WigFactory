@@ -200,12 +200,16 @@ editing a file sitting beside it was never really a rule, and the waiver
 machinery existed only to soften a threshold that should have been a
 judgment.
 
-What replaced it is the Wig Shop's own shelf policy, which is stricter where
-it counts. **The shelf admits perfect fits only**: a wig lands when at least
-one person has claimed every row of it worked on their own hardware. So every
-wig arriving here is already proven by somebody. The open question is how
-many people, and the gate reports that number on every run rather than ruling
-on it.
+What replaced it is one rule the factory holds itself, requirement 2 above:
+**nothing is built without a Perfect Fit**, one person's claims covering
+every row of the wig (owner ruling 2026-09-22). The Wig Shop no longer holds
+that line for us. Since 2026-09-16 its shelf takes wigs with no fitting at
+all, and reports a missing Perfect Fit rather than refusing it, so some wigs
+on the shelf will always be refused here. That is intended: the shop keeps
+files people download, and this repository builds code people install.
+
+Once a wig clears that, the open question is how many people have proven it,
+and the gate reports that number on every run rather than ruling on it.
 
 `--require-handles N` still exists for anybody who wants a hard floor on a
 particular run. It is off by default and CI does not pass it.
@@ -219,7 +223,7 @@ the gate enforces on its behalf.
 
 ### Matrix wigs
 
-A `hair-wig/2` wig carries a climate block instead of, or as well as, a list
+A matrix wig carries a climate block instead of, or as well as, a list
 of signals: a lattice of cells, one per complete device state. There is no
 codebook to build a second implementation of, so the checks are about the
 lattice contradicting itself, and on real files they find plenty.
@@ -371,11 +375,19 @@ Then copy the wig into `wigs/` per ground rule 1 and work from that copy.
 The shop is the factory's input and its rules decide what can arrive. Three
 of them matter here.
 
-**Perfect fits only.** A wig lands on the shelf when at least one person has
-claimed every row of it worked on their own hardware, wig-level rather than
-bundle-level. An honest partial attestation may ride alongside; it just
-cannot open the door. So a wig reaching this repository is already proven by
-somebody, and the factory's remaining question is how widely.
+**The shelf takes unproven wigs** (shop #26, 2026-09-16). A wig for a real
+device can land with no fitting and no signature. What the shelf still
+guarantees is that it parses under the shop's pinned HAIR and carries a
+`wig_id`, which only HAIR mints, so it has been through HAIR at least once
+(the shop refuses a wig without one; #27 says so up front). And a Perfect
+Fit, where one is claimed, means what it always meant: one bundle covering
+every current row, never a union of several. What it no longer guarantees is
+that anybody has proven the wig at all. So the factory checks that itself,
+and refuses anything short of a Perfect Fit.
+
+There is one place the shop got stricter. A replacement with no Perfect Fit
+for a wig that has one is refused there, so a proven description cannot be
+swapped for an unproven one without a maintainer deciding to.
 
 **Identity is the signing key, over there.** The shop counts keys, because a
 name is what somebody typed and a key is which install they typed it on. One
@@ -422,31 +434,56 @@ So the repository is `<brand>-<kind>-<model>-ir` and the tier is stripped:
 list. Either spelling resolves a wig on the command line, so you can name the
 device rather than remember which suffix the file landed with.
 
+**The `<kind>` in a repository name is HAIR's word, not the file's.** HAIR
+0.16 turned kind into a fixed list of twenty-six words plus `other`, and it
+reads a few known spellings as list words at display time without rewriting
+any file: `airconditioner` reads as `ac`. The factory names by the same rule,
+through HAIR's own `normalize_kind`, so a Komeco AC filed as
+`airconditioner` still becomes `komeco-ac-...-ir`. A name is permanent; a
+spelling in somebody's file is not. (Adopted with the 2026-09-22 plan. The publish tool still
+names from the filename stem, and does not yet apply this; it has to before
+the first AC publishes.)
+
 ### Where a wig comes from, and why the factory never repairs one
 
-HAIR 0.9.5 moved fitting out of the closet and onto the device. It matters
-here because it decides what arrives and what this repository is allowed to
-do about it.
+HAIR 0.9.5 moved fitting out of the closet and onto the device, and 0.14.0
+(Detangle) moved repair there too. Both matter here because they decide what
+arrives and what this repository is allowed to do about it.
 
-Somebody adopts a wig onto a device and lives with it. The device window is
-the workbench: test a command, rename it, trash it, re-capture a bad code,
-tune sends and dittos. When it works they SAVE TO CLOSET, tick the rows they
-are willing to vouch for, and sign. That signature is the claim, and the
-wig is a snapshot of what was working at that moment.
+Somebody adopts a wig onto a device and lives with it. The device is the
+workbench: test a command, rename it, re-capture a bad code, tune sends and
+dittos. When it works they save it to the closet, tick the rows they are
+willing to vouch for, and sign. That signature is the claim, and the wig is a
+snapshot of what was working at that moment.
 
-**Combing is the other half, and it is orthogonal.** A claim proves a person
-pointed a blaster and a device answered. A comb proves the other several
-hundred codes are internally coherent. HAIR measured the dimension checklist
-against 74 known-defective cells and it caught one, which is not a flaw in
-the checklist: a checklist attests DIMENSIONS and says so. Combing exists
-because that leaves a gap, and the two together close it.
+**Combing and fitting used to be orthogonal. They are coupled now.** A claim
+proves a person pointed a blaster and a device answered. A comb proves the
+other several hundred codes are coherent with each other, and since 0.12.0
+that each code says what its label says, read against a field map. Since
+0.14.0 a Perfect Fit will not open on a device while any comb finding is
+open: every finding has to be fixed, or answered by a person, first.
 
-**How a defect actually gets fixed, and it is not here.** The comb flags a
-cell; HAIR mints it as its own command row on the device, deliberately not
-mapped to any entity feature; the person tests it with the remote in their
-hand, replaces the code by capture or paste, and tests again; the changed
-rows surface for attestation at save time. The whole loop is a person with
-hardware, and it closes without any derivation machinery.
+That coupling is only as strong as the HAIR that did the fitting. A wig
+fitted before a check existed carries a Perfect Fit and a comb receipt that
+never ran that check, which is exactly the Dreo fan: its stored receipt says
+no suspects, and a live comb with current HAIR flags Oscillate Horizontal. So
+the gate never takes a stored receipt as the answer.
+
+**How a defect gets fixed, and it is not here.** The comb flags a code and
+the device shows it under Needs attention, one row per finding with a plain
+reason. The person fixes it there: accepts bytes that already exist in the
+file, or a frame HAIR synthesized under a ratified field-map rule from one
+real press (checked by reading it back before it is offered), or listens to
+the real remote, or pastes a code. Flagged matrix cells stay in the matrix
+and are fixed in place; they are no longer pulled out as separate command
+rows. A fix writes back to the closet as a repaired copy of the wig, with a
+repair record on each mended code, and a person can instead answer a finding
+without changing bytes ("use it anyway", "keep both"), which is recorded as
+an attestation in the comb receipt.
+
+Neither a repair record nor an attestation is signed by anything. They ride
+outside every hash on purpose, so they are the file's word about itself,
+exactly as the comb receipt is.
 
 So the factory's job when a wig fails the gate is to **say what is wrong and
 stop**. Never repair a wig here. A repaired wig arrives already repaired,
