@@ -1,7 +1,9 @@
 # The climate build path
 
-Status: **the three shape decisions are ruled. No code written yet.**
-Recorded 2026-08-09.
+Status: **built.** The three shape decisions were ruled on 2026-08-09. The
+gate's climate checks and the first climate integration, the Daikin
+FTXS50KVM in `daikin-ac-ftxs50kvm/`, were built against them in September
+2026. `AGENTS.md` section 5.1 is the working guide; this page is why.
 
 An AC integration is not a bigger candle. The candle ships twelve codes and
 a button each; an AC ships a lattice of up to 2,689 complete device states
