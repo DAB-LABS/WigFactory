@@ -440,7 +440,7 @@ reads a few known spellings as list words at display time without rewriting
 any file: `airconditioner` reads as `ac`. The factory names by the same rule,
 through HAIR's own `normalize_kind`, so a Komeco AC filed as
 `airconditioner` still becomes `komeco-ac-...-ir`. A name is permanent; a
-spelling in somebody's file is not. (Adopted with the 2026-09-22 plan. The publish tool still
+spelling in somebody's file is not. (Adopted 2026-09-22. The publish tool still
 names from the filename stem, and does not yet apply this; it has to before
 the first AC publishes.)
 
