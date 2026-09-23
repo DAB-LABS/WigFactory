@@ -838,6 +838,64 @@ Write tests alongside. Round trip every codebook entry through encode and
 decode, assert the vendored decoder agrees with HAIR on every wig signal, and
 mock every connection.
 
+### 5.1 A climate integration
+
+A matrix wig does not become a codebook. There is nothing to encode: every
+state the unit can be in was captured as a complete code, and the integration
+replays the one that matches. The rulings behind the shape are in
+`docs/plans/climate-build-path.md`. What that means on disk:
+
+```
+custom_components/<domain>/
+  __init__.py        loads the lattice in the executor, forwards CLIMATE
+  lattice.json       the wig's climate block, unchanged, as hair-matrix/1
+  lattice.py         loads it, and resolves a state to a cell (no HA imports)
+  command.py         Pronto to signed timings, plus the terminator (no HA imports)
+  climate.py         one ClimateEntity, RestoreEntity, assumed state
+  config_flow.py     emitter, sends per change, options flow for the latter
+  const.py, entity.py, manifest.json, translations/en.json, brand/
+```
+
+The details that are not obvious:
+
+- **`lattice.json` is copied, never rebuilt.** `{"format": "hair-matrix/1",
+  "wig": {..., "wig_id": ...}, "climate": <the wig's climate block>}`. The
+  gate compares the climate block to the wig's field for field and refuses
+  any difference. One cell per line keeps a diff readable.
+- **Resolution is HAIR's, vendored.** `lattice.py` carries a trimmed copy of
+  `wig_climate.resolve_cell` and a `Resolver.resolve(hvac_mode, fan_mode,
+  swing_mode, temperature)` that the entity calls for every send. The gate
+  calls the same method for every state the entity offers, plus off-grid and
+  out-of-range temperatures, and requires HAIR's answer every time.
+- **The entity's words are Home Assistant's; the lattice's stay verbatim.**
+  `FAN_MODES`, `HVAC_MODES` and `SWING_MODES` map one onto the other, one to
+  one, in the wig's order. Fan words have to be valid translation keys (no
+  `+`), and each needs an English name in `translations/en.json`. Where core
+  already has a word, use it: `medium_low` and `medium_high` are what
+  `lg_infrared` uses.
+- **Every send ends on HAIR's 50 ms terminator** (GH #98). Broadlink RM4 Pro
+  firmware garbles a stream that ends on a mark, and the 200 ms capture
+  silence at the end of every Pronto overflows a 16-bit emitter. The gate
+  checks every code converts to exactly
+  `TerminatedCommand(ProntoCommand(code))`'s timings. Do not depend on
+  upstream's `ProntoCommand`: it only exists from infrared-protocols 8.x.
+- **`lattice.py` and `command.py` import nothing from Home Assistant.** That
+  is what lets the gate import them. Anything the entity decides about which
+  code to send belongs in them, not in `climate.py`.
+- **A change sends the whole state.** Off sends the Off code. Changing fan,
+  swing or temperature while off only records it, and the next Turn on sends
+  it. The entity shows the cell that went out, not the request, and only
+  after the send returned.
+- **Restore from the entity's own stored data, never from state
+  attributes.** Home Assistant converts attributes to the installation's
+  unit system, so on an imperial install a saved target of 86 reads back as
+  86 degrees Celsius. Keep the assumed state in `extra_restore_state_data`,
+  in Celsius and the entity's own words. Found on the test box, which runs
+  imperial.
+
+The gate runs these checks when it finds a `lattice.json` beside a
+`lattice.py`, instead of the codebook ones.
+
 ---
 
 ## 6. Stamp the README

@@ -14,6 +14,11 @@
 target-version = "py313"
 line-length = 88
 
+# Frozen copies of generated integration code. They follow the integration's
+# config (Home Assistant's import order, docstring rules), are linted there,
+# and must stay byte for byte what the integration ships.
+extend-exclude = ["verify/fixtures"]
+
 [lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET"]
 

@@ -471,6 +471,13 @@ def provenance_lines(facts: dict[str, Any]) -> list[str]:
         lines.append(
             f"Repaired codes {repairs['records']} ({spread}), as the wig states"
         )
+    climate = facts.get("climate_integration") or {}
+    if climate:
+        lines.append(
+            f"Lattice checked: {climate.get('states_walked')} requests resolved "
+            f"as HAIR resolves them, {climate.get('cells_reached')} of "
+            f"{climate.get('cells')} cells reachable"
+        )
     upstream = facts.get("infrared_protocols")
     lines.append(
         f"Verified against HAIR {facts.get('hair_version') or 'unknown'}"
