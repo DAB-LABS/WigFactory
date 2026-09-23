@@ -19,6 +19,8 @@ Sorting:
   BUILT        an integration already exists for this stem
   DEFECTS      the wig's own contents contradict themselves
   UNUSABLE     will not parse, or carries no complete claim at all
+  UNSUPPORTED  fine as far as anyone can tell, but uses something the factory
+               cannot build or check yet (hair-wig/4 extras, carrierless codes)
 
 There is deliberately no bucket for "not proven by enough people". The shop
 admits perfect fits only, so every wig here is already proven by somebody,
@@ -55,6 +57,13 @@ from verify_wig import (  # noqa: E402
     wig_slug,
 )
 
+# Refusals about the FACTORY's limits rather than the wig's contents. Kept
+# out of DEFECTS on purpose: a wig in this bucket may be perfectly good, and
+# calling it defective would be a false statement about somebody's work.
+_UNSUPPORTED_MARKERS = (
+    "extra lattice(s) (hair-wig/4)",
+    "carry no carrier",
+)
 _UNUSABLE_MARKERS = (
     "does not parse",
     "carries no fitting",
@@ -85,6 +94,12 @@ def classify(report: Report, slug: str, built: set[str]) -> tuple[str, list[str]
     failures = report.failures
     if any(m in f for f in failures for m in _UNUSABLE_MARKERS):
         return "UNUSABLE", failures
+    # Only when the factory's limits are the WHOLE story. A wig that is also
+    # defective goes to DEFECTS, where every reason is listed.
+    if failures and all(
+        any(m in f for m in _UNSUPPORTED_MARKERS) for f in failures
+    ):
+        return "UNSUPPORTED", failures
     # The survey never passes --require-handles, so nothing here can fail on
     # the account count. Anything still failing is the wig contradicting
     # itself.
@@ -135,7 +150,7 @@ def survey(hair: Hair, shop: Path, root: Path) -> list[dict[str, Any]]:
     return rows
 
 
-ORDER = ("READY", "DEFECTS", "UNUSABLE", "BUILT")
+ORDER = ("READY", "DEFECTS", "UNSUPPORTED", "UNUSABLE", "BUILT")
 
 
 def print_survey(rows: list[dict[str, Any]], provenance: dict[str, str] | None) -> None:

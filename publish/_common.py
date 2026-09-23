@@ -454,6 +454,23 @@ def provenance_lines(facts: dict[str, Any]) -> list[str]:
     lines.append(
         f"Independent accounts {facts.get('independent_accounts', 0)}"
     )
+    live = (facts.get("comb") or {}).get("live") or {}
+    if live:
+        mapped = (
+            f", field map {live['field_map']} read {live.get('readable')} of "
+            f"{live.get('codes')} codes"
+            if live.get("field_map") else ""
+        )
+        lines.append(
+            f"Combed with HAIR {live.get('hair')}: "
+            f"{live.get('suspects')} suspect(s){mapped}"
+        )
+    repairs = facts.get("repairs") or {}
+    if repairs:
+        spread = ", ".join(f"{n} {t}" for t, n in repairs["tiers"].items())
+        lines.append(
+            f"Repaired codes {repairs['records']} ({spread}), as the wig states"
+        )
     upstream = facts.get("infrared_protocols")
     lines.append(
         f"Verified against HAIR {facts.get('hair_version') or 'unknown'}"

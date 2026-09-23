@@ -178,12 +178,27 @@ warnings:
    wigs are out of scope: one wig, one codec. A signal that will not decode
    at all is out of scope too, because there is nothing to generate from
    raw replay.
-6. **No row asks for a waveform that cannot exist.** Setting both
+6. **Every label accounts for its whole capture.** A codebook rebuilds each
+   code from its decoded label, so a label that explains only part of what
+   was captured means the integration would transmit something nobody
+   fitted. HAIR 0.14.2 answers this per signal. `False` refuses. `None`
+   means HAIR cannot say, usually because the decoder is upstream's, and
+   that notes and does not refuse (owner ruling 2026-09-22); the forward
+   and reverse checks still have to pass.
+7. **No carrierless codes.** A Pronto with a `0100` header must go out
+   unmodulated. Until it is established that a generated integration can
+   send one that way, the gate refuses rather than ship a code that would
+   go out modulated and look like it worked.
+8. **No extra lattices yet.** A `hair-wig/4` matrix carries peer lattices
+   for presets. Every lattice check here reads the main lattice only, so
+   those codes would pass unchecked, and the gate refuses until it checks
+   them too.
+9. **No row asks for a waveform that cannot exist.** Setting both
    `bypass_protocol` and a ditto count is a contradiction: only the encoder
    renders a repeat frame, so a bypassed row asking for one describes
    something nothing can produce.
-7. **The integration reproduces the transmit recipe**, when one is being
-   checked. See section 3.2.
+10. **The integration reproduces the transmit recipe**, when one is being
+    checked. See section 3.2.
 
 It also **counts distinct contributors**, and this is not the same as
 counting handles. The `github` field is free text somebody typed, so one
@@ -259,6 +274,46 @@ refuses. The judgement is still yours: deciding a four bit run really is
 temperature, recognising a checksum, choosing what the entity exposes. The
 tool exists so you apply that judgement to a field map rather than to 63KB
 of hex.
+
+### The comb, run live
+
+The gate combs every wig itself, with the pinned HAIR, on every run. A comb
+receipt stored in a wig is read, reported and compared, and never taken as
+the answer: it describes the HAIR that wrote it, and the file is text
+anybody can edit. The Dreo fan is the case in point. Its receipt says no
+suspects, and a live comb flags a frame disagreement on Oscillate
+Horizontal, because that check shipped after the wig was combed.
+
+So there are three layers, and each is labelled for what it is:
+
+1. **The live comb**, HAIR's current opinion of these bytes, all thirteen
+   check classes, plus the field tier: whether a field map read the codes,
+   how many, and what they say against their labels. A lattice no map
+   covers is said out loud, because "no suspects" sounds the same whether
+   the payload was read or not.
+2. **The stored receipt**, as history. More suspects live than stored means
+   newer HAIR checks more. Fewer live than stored is what a completed repair
+   looks like, and the gate says so rather than accusing it.
+3. **The gate's own lattice and frame checks**, the independent second
+   opinion. Where the gate and the comb disagree about a class they both
+   judge, the gate says that too.
+
+The live comb **reports and does not refuse**. A Perfect Fit made in HAIR
+0.14 or later could not open while a finding was open, so on a current wig
+a live finding means either a newer check or an answered one. Whether an
+unanswered live finding should stop a build, particularly a field mismatch
+on a lattice, is an open ruling.
+
+Answers a person gave to a finding without changing bytes ("use it anyway",
+"keep both") ride in the receipt as attestations keyed to the bytes and the
+field-map version. The gate reports whether each still matches the current
+code, and never whether it was right.
+
+Repair records (HAIR 0.14.0) are read the same way: counted by tier
+(air-tested, rule-derived, accepted), carried into the generated README,
+and never treated as evidence, because they sit outside every hash and
+nothing signs them. A code that claims a repair and is still flagged by the
+live comb is called out.
 
 ### The transmit recipe, and what a claim actually binds
 
@@ -776,6 +831,10 @@ the part most likely to be done carelessly. It must carry:
   only repeat in play.
 - That the codebook was machine verified against HAIR's independent
   decoders, and in which directions.
+- **What the live comb said**, with which HAIR, and on a lattice which field
+  map read how many codes. `provenance_lines()` writes it.
+- **How many codes the wig says were repaired, by tier**, when any were.
+  Say it is the wig's own statement: repair records are signed by nothing.
 - Installation, the entities it creates, and what to do when a code does
   not work.
 

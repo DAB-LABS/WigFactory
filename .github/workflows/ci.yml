@@ -119,6 +119,12 @@ jobs:
       - name: Recipe and digest parity
         run: python verify/test_recipe.py --hair reference/HAIR
 
+      # What the gate SAYS about a wig: live comb, decode trust, carrierless
+      # and extras refusals, repairs and attestations. Real shelf wigs
+      # vendored in verify/fixtures/, and small mutations of them.
+      - name: Gate behaviour
+        run: python verify/test_gate.py --hair reference/HAIR
+
       # Every wig in the shop, through the real input gate. Not a fixture: a
       # fixture cannot tell you the shop published something the factory
       # cannot read, and that is the interesting failure.

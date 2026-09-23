@@ -204,9 +204,11 @@ def check_parity(hair_root: Path) -> tuple[list[str], str, bool]:
             "is a deliberate new use, say so here."
         )
 
-    # The comb check names the gate reasons about. A typo would silently move
-    # a class into the "cannot see" bucket, which reads as caution and is
-    # actually blindness, so it is checked rather than eyeballed.
+    # The comb check names, BOTH directions. A class HAIR has and the factory
+    # does not name is a class the gate cannot talk about, and silence about
+    # a finding reads as approval. A class the factory names that HAIR no
+    # longer has is a check the gate thinks is running when it is not. On
+    # 2026-09-02 this file only checked five names and HAIR had thirteen.
     try:
         comb = __import__(
             "custom_components.hair.wig_comb", fromlist=["x"]
@@ -214,29 +216,23 @@ def check_parity(hair_root: Path) -> tuple[list[str], str, bool]:
     except Exception as err:  # noqa: BLE001 - reported, not raised
         problems.append(f"could not import HAIR's wig_comb: {err!r}")
     else:
-        from verify_wig import (
-            COMB_DUPLICATED_NEIGHBOUR,
-            COMB_FRAME_SHAPE,
-            COMB_MALFORMED,
-            COMB_MISSING_CELL,
-            COMB_STRAY_BURST,
-        )
+        from verify_wig import COMB_CLASSES
 
-        for ours, theirs in (
-            (COMB_MALFORMED, "CHECK_MALFORMED"),
-            (COMB_STRAY_BURST, "CHECK_STRAY_BURST"),
-            (COMB_FRAME_SHAPE, "CHECK_FRAME_SHAPE"),
-            (COMB_DUPLICATED_NEIGHBOUR, "CHECK_DUPLICATED_NEIGHBOUR"),
-            (COMB_MISSING_CELL, "CHECK_MISSING_CELL"),
-        ):
-            expected = getattr(comb, theirs, None)
-            if expected is None:
-                problems.append(f"HAIR's wig_comb has no {theirs}")
-            elif expected != ours:
-                problems.append(
-                    f"comb check drift: the factory calls it {ours!r}, HAIR "
-                    f"calls it {expected!r}"
-                )
+        theirs = {
+            value
+            for name, value in vars(comb).items()
+            if name.startswith("CHECK_") and isinstance(value, str)
+        }
+        for missing in sorted(theirs - COMB_CLASSES):
+            problems.append(
+                f"HAIR's comb has a check class the factory does not name: "
+                f"{missing!r}. Add it to COMB_CLASSES and decide what the gate "
+                f"says about it."
+            )
+        for stale in sorted(COMB_CLASSES - theirs):
+            problems.append(
+                f"the factory names a comb class HAIR no longer has: {stale!r}"
+            )
 
     their_send = getattr(wf, "MAX_SEND_COUNT", None)
     if their_send is not None and int(their_send) != SEND_COUNT_MAX:
