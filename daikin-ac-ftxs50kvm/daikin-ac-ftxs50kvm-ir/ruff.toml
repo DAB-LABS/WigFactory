@@ -1,0 +1,23 @@
+# Mirrors the isort conventions Home Assistant core uses, so this repo's lint
+# agrees with the codebase it was generated from. Without combine-as-imports
+# a plain ruff run splits `from homeassistant.components.infrared import
+# (DOMAIN as INFRARED_DOMAIN, async_get_emitters)` into two blocks, which is
+# not how core writes it.
+target-version = "py313"
+line-length = 88
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET", "D"]
+ignore = [
+  "D203",  # incompatible with D211
+  "D213",  # incompatible with D212
+]
+
+[lint.isort]
+force-sort-within-sections = true
+known-first-party = ["homeassistant"]
+combine-as-imports = true
+split-on-trailing-comma = false
+
+[lint.pydocstyle]
+convention = "pep257"
