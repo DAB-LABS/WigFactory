@@ -140,12 +140,17 @@ not the place that decides how much of a lattice a person has to vouch for.
 
 ## What is blocked, and on what
 
-**No AC wig currently passes the input gate.** All six in the census fail on
-data quality, and the fix is not here: it is somebody adopting one onto a
-device, working the comb-flagged rows with a remote in hand, and saving it
-back attested. Until one such wig exists, this path can be built but not
-proven, and building against a wig that fails means the first real test
-happens after the code is written.
+**Nothing, on the input side, since 2026-09-16.** The Daikin FTXS50KVM
+(`daikin-ac-ftxs50kvm-perfect-fit.wig.json`) is the first AC wig to pass the
+input gate: physically captured off an ARC433B70 remote, a complete lattice
+of 2 modes, 5 fan speeds, 4 swing settings and 13 temperatures (520 cells,
+one frame shape throughout), one Perfect Fit, no comb suspects, and HAIR's
+DAIKIN216 field map read every field of every code with no mismatch. It is
+the wig this path gets built and proven against.
+
+Before it, all six AC wigs in the census failed on data quality, and the fix
+was never going to be here: it was somebody adopting one onto a device,
+working the flagged codes with a remote in hand, and saving it back.
 
 **The kind-to-platform table already says `ac`, `heater` -> `climate`.** No
 change needed there.

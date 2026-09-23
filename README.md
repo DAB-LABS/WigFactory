@@ -12,7 +12,7 @@ A **wig** is one JSON file holding one remote's codes, captured with [HAIR](http
 
 Anyone can generate an integration from a table of IR codes. The interesting question is whether the result actually drives the hardware, and a table cannot answer that.
 
-A wig can. Every wig that enters this factory is a **perfect fit**: somebody adopted it onto a real device, lived with it, and then claimed that every row of it worked on their own hardware. Each claim is bound to a digest of the exact signal it covers, including the repeat count and protocol handling that signal is sent with, and signed by the install that recorded it. Change a code afterward and its digest stops matching the claim that covered it.
+A wig can. This factory only builds from a **Perfect Fit**: somebody adopted the wig onto a real device, lived with it, and then claimed that every row of it worked on their own hardware. Each claim is bound to a digest of the exact signal it covers, including the repeat count and protocol handling that signal is sent with, and signed by the install that recorded it. Change a code afterward and its digest stops matching the claim that covered it.
 
 So the factory starts from evidence rather than from a spreadsheet. That is the whole premise.
 
@@ -90,7 +90,9 @@ One integration per device. The codebook is vendored inside it rather than publi
 
 ## What the shop guarantees, and what it does not
 
-The [Wig Shop](https://github.com/DAB-LABS/WigShop) shelf admits perfect fits only. A wig lands when at least one person has claimed every row of it worked on their own hardware, so anything arriving here is already proven by somebody. What the shelf does not say is how many people, on how many units, in how many rooms. That is the number the factory reports.
+The [Wig Shop](https://github.com/DAB-LABS/WigShop) shelf takes wigs with no fitting at all, and marks the ones somebody has proven whole as a Perfect Fit. The factory takes only those: at least one person has claimed every row worked on their own hardware, in one fitting, or nothing is built. What a Perfect Fit does not say is how many people, on how many units, in how many rooms. That is the number the factory reports.
+
+A Perfect Fit is also only as thorough as the HAIR that made it. Newer HAIR checks codes that older HAIR did not, so the factory combs every wig again with its own pinned HAIR rather than trusting the result a wig carries.
 
 So everything published here ships marked **untested by others**, carrying the claims that came in with the wig. It earns a stronger statement when independent people install it, confirm it drives their hardware, and record that back in the shop.
 
