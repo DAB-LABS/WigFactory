@@ -98,10 +98,38 @@ RECIPE_MAJOR = 3
 # string key would silently move a class into the "cannot see" bucket, which
 # reads as caution and is actually blindness.
 COMB_MALFORMED = "malformed"
+COMB_FRAME_DISAGREEMENT = "frame-disagreement"
+COMB_FIELD_MISMATCH = "field-mismatch"
+COMB_FRAME_INTEGRITY = "frame-integrity"
 COMB_STRAY_BURST = "stray-burst"
 COMB_FRAME_SHAPE = "frame-shape"
 COMB_DUPLICATED_NEIGHBOUR = "duplicated-neighbour"
 COMB_MISSING_CELL = "missing-cell"
+COMB_STRAY_CELL = "stray-cell"
+COMB_COORDINATE_COLLISION = "coordinate-collision"
+COMB_DUPLICATE_LABELS = "duplicate-labels"
+COMB_BYPASS_WITH_DITTOS = "bypass-with-dittos"
+COMB_RAMP_DITTOS = "ramp-dittos"
+
+# Every class HAIR's comb can report. test_recipe.py fails the moment HAIR
+# grows one this list does not name, because an unnamed class is one the gate
+# cannot talk about, and silence about a finding reads as approval.
+COMB_CLASSES = frozenset({
+    COMB_MALFORMED, COMB_FRAME_DISAGREEMENT, COMB_FIELD_MISMATCH,
+    COMB_FRAME_INTEGRITY, COMB_STRAY_BURST, COMB_FRAME_SHAPE,
+    COMB_DUPLICATED_NEIGHBOUR, COMB_MISSING_CELL, COMB_STRAY_CELL,
+    COMB_COORDINATE_COLLISION, COMB_DUPLICATE_LABELS, COMB_BYPASS_WITH_DITTOS,
+    COMB_RAMP_DITTOS,
+})
+
+# The classes where the state a code sends is not the state it claims. The
+# rest are about how a capture looks; these are about what the device does.
+COMB_WRONG_STATE = frozenset({COMB_DUPLICATED_NEIGHBOUR, COMB_FIELD_MISMATCH})
+
+# How honest a repair record is about the room it was proved in. Written by
+# HAIR 0.14.0 and later onto each mended code, outside every hash.
+REPAIR_KEY = "hair_repair"
+REPAIR_TIERS = ("air-tested", "rule-derived", "accepted")
 
 REQUIRED_HAIR_API = {
     "wig_format": (
@@ -112,6 +140,13 @@ REQUIRED_HAIR_API = {
     ),
     "wig_fitting": ("bundle_is_complete",),
     "wig_climate": ("dimension_checklist",),
+    # The live comb (HAIR 0.9.1, field tier from 0.12.0). Read on every run
+    # rather than trusting the receipt a file carries.
+    "wig_comb": ("comb_wig",),
+    # Decode trust (HAIR 0.14.2): does a label account for its whole
+    # capture. The factory rebuilds codes from labels, so this is the
+    # difference between transmitting what was fitted and something else.
+    "protocol_decode": ("try_decode_identity", "decode_coverage"),
 }
 
 # How the gate exits, so a caller can tell a verdict from a breakdown.
@@ -538,6 +573,24 @@ class Hair:
         except BaseException:  # noqa: BLE001
             self.wig_climate = None
 
+        self.wig_comb: Any | None
+        try:
+            self.wig_comb = importlib.import_module(
+                "custom_components.hair.wig_comb"
+            )
+        except BaseException:  # noqa: BLE001 - reported by _require_api
+            self.wig_comb = None
+
+        # Optional: only used to tell whether an attestation's field-map
+        # version still matches the map HAIR reads the codes with today.
+        self.field_readers: Any | None
+        try:
+            self.field_readers = importlib.import_module(
+                "custom_components.hair.field_readers"
+            )
+        except BaseException:  # noqa: BLE001
+            self.field_readers = None
+
         # LAST. Every optional import has to have been attempted before the
         # audit runs, or the audit reports a module that loads perfectly well
         # as missing, which is a confident wrong answer.
@@ -585,6 +638,30 @@ class Hair:
     def identity(self, raw_timings: list[int]) -> Any | None:
         """Decode signed microsecond timings to a HAIR identity."""
         return self.protocol_decode.try_decode_identity(raw_timings)
+
+    def covers_capture(self, raw_timings: list[int]) -> bool | None:
+        """Does the decoded label account for the whole capture?
+
+        True, False, or None when HAIR cannot say, which is HAIR's own
+        answer for a decoder whose frame accounting it cannot verify.
+        """
+        return self.protocol_decode.decode_coverage(raw_timings)
+
+    def comb(self, wig: Any) -> Any:
+        """HAIR's comb, run now, on these bytes."""
+        return self.wig_comb.comb_wig(wig)
+
+    def field_map_version(self, protocol_id: str | None) -> str | None:
+        """The content version of the field map HAIR reads a family with."""
+        if not protocol_id or self.field_readers is None:
+            return None
+        try:
+            for field_map in self.field_readers.library():
+                if field_map.protocol_id == protocol_id:
+                    return field_map.version
+        except Exception:  # noqa: BLE001 - absence is the honest answer
+            return None
+        return None
 
     def timings_from_pronto(self, pronto: str) -> list[int] | None:
         """Convert Pronto hex to signed microsecond timings."""
@@ -733,10 +810,14 @@ def run_input_gate(
         duplicates = sorted({a for a in aliases if aliases.count(a) > 1})
         report.fail(f"duplicate aliases in the wig: {', '.join(duplicates)}")
 
+    _check_carrierless(hair, wig, report)
+
     if matrix is not None:
+        _check_extras(matrix, report)
         check_matrix(hair, wig, matrix, report)
 
-    check_comb(wig, report)
+    live = check_comb(hair, wig, report)
+    check_repairs(hair, wig, live, report)
 
     # BEFORE the fittings, and unconditionally. The recipe is a property of
     # the wig: a row asking for a waveform nothing can produce is wrong even
@@ -772,9 +853,10 @@ def matrix_checklist_digests(hair: Hair, wig: Any) -> set[str] | None:
     bundle over a two-thousand-cell lattice reads complete. Silence is not a
     claim.
 
-    Verified against the shipped source rather than assumed. HAIR's own fix is
-    queued, but files minted by 0.9.7 installs are already in the wild, so the
-    factory derives the answer instead of trusting the one it is given. The
+    Verified against the shipped source rather than assumed. HAIR fixed its
+    own ``bundle_is_complete`` in 0.9.8 (``dimension_checklist_digests``), but
+    files minted by 0.9.7 installs are in the wild, so the factory still
+    derives the answer instead of trusting the one it is given. The
     Wig Shop's validator reached the same conclusion independently and this
     mirrors its derivation exactly, down to the digest arguments: cells carry
     no dittos and are never bypassed, so both are fixed rather than read.
@@ -1203,151 +1285,476 @@ def _check_recipe(hair: Hair, wig: Any, report: Report) -> None:
 # ---------------------------------------------------------------------------
 
 
-def check_comb(wig: Any, report: Report) -> None:
-    """Read what HAIR's comb found, and treat it as provenance not proof.
+def _all_codes(hair: Hair, wig: Any) -> list[tuple[str, str]]:
+    """Every transmittable code in the wig, as (row key, pronto)."""
+    codes = [(signal.alias, signal.pronto) for signal in wig.signals]
+    matrix = getattr(wig, "climate", None)
+    if matrix is not None:
+        for name in ("off", "on"):
+            pronto = getattr(matrix, name, None)
+            if pronto:
+                codes.append((name, pronto))
+        codes += [(hair.cell_key(cell), cell.pronto) for cell in matrix.cells]
+        for extra in getattr(matrix, "extras", None) or []:
+            codes += [
+                (f"({extra.key}) {hair.cell_key(cell)}", cell.pronto)
+                for cell in extra.cells
+            ]
+    return codes
 
-    HAIR 0.9.1 checks a wig's codes against each other on import and leaves a
-    receipt. It answers a question a fitting cannot: a fitting attests the
-    dimension checklist, which on a matrix wig is nine rows out of hundreds,
-    so a cell sending its neighbour's code sits under a complete signed
-    fitting and nothing in the paperwork disagrees.
 
-    **The gate does not trust it.** The receipt is unsigned and sits outside
-    the canonical hash, so anybody can paste a clean one onto a broken wig.
-    Every check here runs regardless, which makes forging it pointless, which
-    is the property worth having. What the receipt is good for is provenance:
-    who checked these codes, when, and with what result.
+def _check_carrierless(hair: Hair, wig: Any, report: Report) -> None:
+    """Refuse codes that must go out with no carrier at all.
 
-    So this reports and never refuses. Where the factory and the comb
-    disagree, the disagreement is the interesting part and gets said out loud
-    rather than resolved.
+    HAIR 0.16.0 accepts a learned Pronto whose header is ``0100``: it states a
+    time base where an ordinary code states a carrier frequency, and it has to
+    be transmitted unmodulated. HAIR only offers such a code to an emitter that
+    can send without a carrier. Whether an integration built on Home
+    Assistant's ``infrared`` platform can do that has not been established, so
+    the factory refuses rather than ship a code that would go out modulated
+    and look like it worked.
     """
+    bare = [
+        key for key, pronto in _all_codes(hair, wig)
+        if str(pronto).split()[:1] == ["0100"]
+    ]
+    if not bare:
+        return
+    shown = ", ".join(bare[:6])
+    if len(bare) > 6:
+        shown += f"; and {len(bare) - 6} more"
+    report.fail(
+        f"{len(bare)} code(s) carry no carrier (Pronto header 0100) and must be "
+        f"sent unmodulated: {shown}. It is not yet established that a "
+        f"generated integration can send one that way, so nothing is built "
+        f"from this wig until it is."
+    )
+
+
+def _check_extras(matrix: Any, report: Report) -> None:
+    """Refuse hair-wig/4 extra lattices until the gate checks them.
+
+    A v4 wig carries peer lattices beside the main one, one per preset. They
+    are real transmit recipes inside the signed cells hash, but every lattice
+    check in this file walks ``matrix.cells`` only, so an extras lattice would
+    pass without any of them having looked. Silence reads as approval, so
+    this refuses instead.
+    """
+    extras = list(getattr(matrix, "extras", None) or [])
+    if not extras:
+        return
+    report.facts["extras"] = [
+        {"axis": e.axis, "key": e.key, "cells": len(e.cells)} for e in extras
+    ]
+    names = ", ".join(f"{e.axis} {e.key!r} ({len(e.cells)} cells)" for e in extras)
+    report.fail(
+        f"this matrix carries {len(extras)} extra lattice(s) (hair-wig/4): "
+        f"{names}. The gate's lattice checks read the main lattice only, so "
+        f"these codes would pass unchecked. Refused until the gate checks "
+        f"every lattice a wig carries."
+    )
+
+
+def check_repairs(hair: Hair, wig: Any, live: Any | None, report: Report) -> None:
+    """Say what the file CLAIMS was mended, and hold the claim to the codes.
+
+    HAIR 0.14.0 writes a ``hair_repair`` record onto each code a person fixed
+    on a device. It rides in the code's own extras, outside every canonical
+    hash, so **nothing signs it**: it can be stamped onto any wig or stripped
+    off one and every other check still passes. This reads it exactly as it
+    reads a comb receipt, as the file's word about itself, and never as
+    evidence. Refuses nothing on tier; a lattice already carries hundreds of
+    codes nobody pressed, which is what a dimension checklist is.
+
+    What it can check without trusting anybody: a code the file says was
+    mended should no longer be one the live comb flags.
+    """
+    records: list[tuple[str, dict[str, Any]]] = []
+    for signal in wig.signals:
+        record = (getattr(signal, "extra", None) or {}).get(REPAIR_KEY)
+        if isinstance(record, dict):
+            records.append((signal.alias, record))
+    matrix = getattr(wig, "climate", None)
+    if matrix is not None:
+        for cell in matrix.cells:
+            record = (getattr(cell, "extra", None) or {}).get(REPAIR_KEY)
+            if isinstance(record, dict):
+                records.append((hair.cell_key(cell), record))
+    if not records:
+        return
+
+    tiers: dict[str, int] = {}
+    overridden: list[str] = []
+    for key, record in records:
+        tier = record.get("tier")
+        tier = tier if tier in REPAIR_TIERS else "unstated"
+        tiers[tier] = tiers.get(tier, 0) + 1
+        if record.get("reading_disagreed"):
+            overridden.append(key)
+    report.facts["repairs"] = {
+        "records": len(records),
+        "tiers": {t: tiers[t] for t in (*REPAIR_TIERS, "unstated") if t in tiers},
+        "overridden": overridden,
+    }
+    spread = ", ".join(
+        f"{n} {t}" for t, n in report.facts["repairs"]["tiers"].items()
+    )
+    report.note(
+        f"this file states that {len(records)} code(s) were repaired in HAIR "
+        f"({spread}). Repair records sit outside every hash, so nothing signs "
+        f"them: they are the file's word, not proof. air-tested means the fix "
+        f"was fired at the device; rule-derived means it was written under a "
+        f"field-map rule whose sample was fired; accepted means nothing was "
+        f"transmitted."
+    )
+    if tiers.get("unstated"):
+        report.note(
+            f"{tiers['unstated']} repair record(s) state no tier, so they do not "
+            f"even say whether anything was transmitted. HAIR writes a tier on "
+            f"every repair it makes, so these came from somewhere else."
+        )
+    if overridden:
+        shown = ", ".join(overridden[:6])
+        report.note(
+            f"{len(overridden)} repair(s) were kept after HAIR read the new "
+            f"bytes as something other than their label: {shown}. That is how "
+            f"a field map learns it is wrong, and worth reading."
+        )
+    if live is not None:
+        claimed = {key for key, _record in records}
+        still = sorted({
+            key for finding in live.findings for key in finding.keys
+            if key in claimed
+        })
+        if still:
+            report.note(
+                f"{len(still)} code(s) carry a repair record and are still "
+                f"flagged by the live comb: {', '.join(still[:6])}. Whatever "
+                f"the record says was done, those codes did not change."
+            )
+
+
+def check_comb(hair: Hair, wig: Any, report: Report) -> Any | None:
+    """Comb the wig live with the pinned HAIR, and read the receipt as history.
+
+    Three layers, each labelled for what it is:
+
+    1. **The live comb.** HAIR's own current opinion of these bytes, run here
+       and now. It cannot be forged and it cannot be out of date.
+    2. **The stored receipt.** What whoever combed saw, when, with which HAIR.
+       Provenance only. The Dreo fan's receipt says no suspects; a live comb
+       flags Oscillate Horizontal, because the check that finds it shipped
+       after the wig was combed. A receipt describes the HAIR that wrote it.
+    3. **The gate's own checks** elsewhere in this file (lattice consistency,
+       frame shape). The independent second opinion.
+
+    The output worth reading is wherever those disagree. The live comb
+    reports, with one exception: on a matrix, a wrong-state finding nobody
+    has answered refuses (owner ruling 2026-09-23). See _refuse_wrong_state.
+
+    Returns the live comb report, or None when the comb could not run.
+    """
+    live = _comb_live(hair, wig, report)
+    receipt = _read_receipt(wig, report)
+    if live is not None:
+        _compare_receipt(live, receipt, report)
+        _compare_with_ours(live, report)
+        _attestations(hair, wig, live, receipt, report)
+        _refuse_wrong_state(wig, live, report)
+    return live
+
+
+def _comb_live(hair: Hair, wig: Any, report: Report) -> Any | None:
+    try:
+        live = hair.comb(wig)
+    except Exception as err:  # noqa: BLE001 - reported, and it is a refusal
+        report.fail(
+            f"HAIR {hair.version}'s comb could not run on this wig ({err!r}), "
+            f"so nobody has checked its codes against each other here."
+        )
+        return None
+
+    counts = dict(live.counts())
+    unknown = sorted(set(counts) - COMB_CLASSES)
+    coverage = live.coverage.to_dict() if live.coverage is not None else {}
+    protocol = coverage.get("protocol") or {}
+    report.facts["comb"] = {
+        "live": {
+            "hair": hair.version,
+            "suspects": live.suspects,
+            "counts": counts,
+            "codes": coverage.get("codes"),
+            "checked": coverage.get("checked"),
+            "field_map": protocol.get("id"),
+            "readable": protocol.get("readable"),
+        },
+    }
+    if unknown:
+        report.note(
+            f"the comb reported class(es) this gate has no name for: "
+            f"{', '.join(unknown)}. HAIR has grown a check; teach COMB_CLASSES."
+        )
+
+    suspects = [f for f in live.findings if not f.advisory]
+    advisories = [f for f in live.findings if f.advisory]
+    if not suspects:
+        report.ok(f"combed live with HAIR {hair.version}: no suspects")
+    else:
+        detail = "; ".join(f"{k}: {v}" for k, v in counts.items())
+        examples = []
+        for finding in suspects[:6]:
+            examples.append(f"{finding.check} on {' / '.join(finding.keys[:2])}")
+        more = f"; and {len(suspects) - 6} more" if len(suspects) > 6 else ""
+        report.note(
+            f"combed live with HAIR {hair.version}: {live.suspects} suspect(s) "
+            f"({detail}). {'; '.join(examples)}{more}."
+        )
+        wrong = [f for f in suspects if f.check in COMB_WRONG_STATE]
+        # On a matrix these refuse, and _refuse_wrong_state names them.
+        if wrong and getattr(wig, "climate", None) is None:
+            keys = sorted({k for f in wrong for k in f.keys})
+            report.note(
+                f"{len(keys)} of those are codes that send a state other than "
+                f"the one they are labelled with: {', '.join(keys[:6])}"
+                + (f"; and {len(keys) - 6} more" if len(keys) > 6 else "")
+                + ". That is the class that looks like it worked while landing "
+                "on the wrong state."
+            )
+    if advisories:
+        report.note(
+            f"the comb also raised {len(advisories)} advisory finding(s) "
+            f"({', '.join(sorted({f.check for f in advisories}))}), which are "
+            f"worth a look and are never counted as suspects."
+        )
+
+    # What the comb could actually read. A lattice no field map covers passes
+    # every structural check with not one byte of its payload read, and that
+    # has to be said, because "no suspects" sounds the same either way.
+    total = coverage.get("codes")
+    if getattr(wig, "climate", None) is not None:
+        if protocol.get("id"):
+            report.ok(
+                f"field map {protocol['id']} read {protocol.get('readable')} of "
+                f"{protocol.get('codes', total)} code(s), so their contents were "
+                f"checked against their labels, not only their shape"
+            )
+        else:
+            report.note(
+                f"no field map covers this protocol: 0 of {total} code(s) had "
+                f"their contents checked. The comb compared their shapes only."
+            )
+    elif protocol.get("id"):
+        report.ok(
+            f"field map {protocol['id']} read {protocol.get('readable')} of "
+            f"{protocol.get('codes', total)} code(s), so their checksums were "
+            f"verified too"
+        )
+    return live
+
+
+def _refuse_wrong_state(wig: Any, live: Any, report: Report) -> None:
+    """Refuse a matrix whose cells the live comb says land on the wrong state.
+
+    A wrong-state finding (``field-mismatch``, ``duplicated-neighbour``) on a
+    climate cell means the code sent for one label sets the unit to another.
+    A generated climate entity would then report the state it asked for
+    while the unit sits in a different one, and nothing downstream can tell.
+    The gate already refuses its own lattice defects of that kind, and HAIR
+    will not open a Perfect Fit while such a finding is open, so an
+    unanswered one refuses here too (owner ruling 2026-09-23).
+
+    Answered means what it means in HAIR's Detangle: a person's attestation
+    for that cell that still matches its current bytes and field-map version.
+    Answers are tracked per cell, as HAIR tracks them, so one answered cell
+    never answers its neighbour. Command wigs are unchanged: a flat command
+    either works or visibly does not, and the fitting covers that.
+    """
+    if getattr(wig, "climate", None) is None:
+        return
+    by_key: dict[str, set[str]] = {}
+    for finding in live.findings:
+        if finding.advisory or finding.check not in COMB_WRONG_STATE:
+            continue
+        for key in finding.keys:
+            by_key.setdefault(key, set()).add(finding.check)
+    if not by_key:
+        return
+    comb = report.facts.setdefault("comb", {})
+    standing = set((comb.get("attested") or {}).get("standing") or [])
+    unanswered = sorted(k for k in by_key if k not in standing)
+    answered = sorted(k for k in by_key if k in standing)
+    comb["wrong_state"] = {"unanswered": unanswered, "answered": answered}
+    if answered:
+        report.note(
+            f"{len(answered)} cell(s) the live comb says land on the wrong "
+            f"state carry a standing answer from a person, so they do not "
+            f"refuse: {', '.join(answered[:6])}"
+            + (f"; and {len(answered) - 6} more" if len(answered) > 6 else "")
+            + ". The answer is unsigned and the comb still doubts them."
+        )
+    if unanswered:
+        shown = ", ".join(
+            f"{key} ({', '.join(sorted(by_key[key]))})" for key in unanswered[:6]
+        )
+        more = f"; and {len(unanswered) - 6} more" if len(unanswered) > 6 else ""
+        report.fail(
+            f"the live comb says {len(unanswered)} cell(s) send a state other "
+            f"than the one on their label, and nobody has answered it: "
+            f"{shown}{more}. A climate entity built from this would report "
+            f"one state while the unit sits in another. Repair or answer them "
+            f"in HAIR's Needs attention, then save the wig again."
+        )
+
+
+def _read_receipt(wig: Any, report: Report) -> dict[str, Any] | None:
     comb = wig.extra.get("comb")
     if comb is None:
         report.note(
-            "no comb receipt. Nobody has checked this wig's codes against "
-            "each other, which is not the same as their being clean. HAIR "
-            "0.9.1 and newer records one on import."
+            "no stored comb receipt. Whoever made this wig never combed it, "
+            "which is why the gate combs it itself."
         )
-        return
-    if not isinstance(comb, dict):
-        report.note("the comb receipt is not an object, so it says nothing")
-        return
-
-    suspects = comb.get("suspects")
-    dated = comb.get("date")
-    when = f" on {dated}" if dated else ""
-    if not isinstance(suspects, int):
-        report.note(f"the comb receipt{when} carries no readable suspect count")
-        return
-
+        return None
+    if not isinstance(comb, dict) or not isinstance(comb.get("suspects"), int):
+        report.note("the stored comb receipt is unreadable, so it says nothing")
+        return None
     counts = comb.get("counts") if isinstance(comb.get("counts"), dict) else {}
-    report.facts["comb"] = {
-        "date": dated,
+    report.facts.setdefault("comb", {})["receipt"] = {
+        "date": comb.get("date"),
         "version": comb.get("version"),
-        "suspects": suspects,
+        "suspects": comb["suspects"],
         "counts": dict(counts),
     }
+    return comb
 
-    # What this run found on its own, per class, so the two can be compared
-    # rather than one being taken on faith.
-    #
-    # PER CLASS, not as one total, because the gate does not check everything
-    # the comb checks. Ramp dittos it never looks at; stray cells and
-    # coordinate collisions it does not currently reproduce. Comparing totals
-    # would let a class the gate cannot see cancel out a class it can, in
-    # either direction.
+
+def _compare_receipt(live: Any, receipt: dict[str, Any] | None, report: Report) -> None:
+    """Hold the receipt a file carries against what the comb says today."""
+    if receipt is None:
+        return
+    stored = receipt["suspects"]
+    when = f" of {receipt['date']}" if receipt.get("date") else ""
+    version = receipt.get("version")
+    label = f"the stored receipt{when} (version {version})"
+    stored_counts = receipt.get("counts")
+    if not isinstance(stored_counts, dict):
+        stored_counts = {}
+    live_counts = dict(live.counts())
+    if stored == live.suspects and stored_counts == live_counts:
+        report.ok(f"{label} agrees with the live comb")
+        return
+    newer = sorted(set(live_counts) - set(stored_counts))
+    gone = sorted(set(stored_counts) - set(live_counts))
+    if live.suspects > stored:
+        report.note(
+            f"{label} records {stored} suspect(s); the live comb finds "
+            f"{live.suspects}"
+            + (f", in class(es) the receipt never mentions: {', '.join(newer)}"
+               if newer else "")
+            + ". A receipt describes the HAIR that wrote it, and newer HAIR "
+            "checks more."
+        )
+    elif live.suspects < stored:
+        report.facts["comb"]["repaired"] = stored - live.suspects
+        report.ok(
+            f"{label} records {stored} suspect(s) and the live comb finds "
+            f"{live.suspects}"
+            + (f"; gone entirely: {', '.join(gone)}" if gone else "")
+            + ". That is what a completed repair looks like."
+        )
+    else:
+        report.note(
+            f"{label} and the live comb both count {stored} suspect(s) but "
+            f"split them differently ({stored_counts} then, {live_counts} "
+            f"now). Read both."
+        )
+
+
+def _compare_with_ours(live: Any, report: Report) -> None:
+    """Where the gate's own independent checks and HAIR's comb disagree.
+
+    Only on matrix wigs, where the gate reproduces some of the same classes
+    itself. Compared per class, never as totals: a class one side cannot see
+    must not cancel out a class it can.
+    """
+    if report.facts.get("shape") != "matrix":
+        return
     shape = report.facts.get("frame_shape") or {}
-    ours_by_class = {
+    ours = {
         COMB_DUPLICATED_NEIGHBOUR: len(report.facts.get("lattice_defects") or []),
         COMB_MALFORMED: len(shape.get("malformed") or []),
-        COMB_FRAME_SHAPE: len(shape.get("malformed") or []),
         COMB_STRAY_BURST: len(shape.get("noisy") or []),
         COMB_MISSING_CELL: len(report.facts.get("missing_cells") or []),
     }
-    ours = sum(ours_by_class.values())
-
-    if suspects == 0:
-        report.ok(f"combed{when}, no suspects recorded")
-        if ours:
+    theirs = dict(live.counts())
+    for check, count in ours.items():
+        if (count > 0) != (theirs.get(check, 0) > 0):
             report.note(
-                f"but this run found {ours} problem(s) the receipt does not "
-                f"mention. Either the comb predates the current codes, or its "
-                f"checks and these ones do not cover the same ground. The "
-                f"receipt does not bind to a content hash, so it cannot say "
-                f"which."
+                f"the gate's own check and HAIR's comb disagree on {check}: "
+                f"the gate counts {count}, the comb {theirs.get(check, 0)}. Two "
+                f"implementations answering one question differently is worth "
+                f"reading before anything is built."
             )
+
+
+def _attestations(
+    hair: Hair,
+    wig: Any,
+    live: Any,
+    receipt: dict[str, Any] | None,
+    report: Report,
+) -> None:
+    """A person's answers to findings, as the receipt records them.
+
+    HAIR 0.14.0 lets somebody answer a finding without changing bytes ("use it
+    anyway", "keep both"). The answer is keyed to the bytes and to the field
+    map version, so it expires by itself when either changes. It is not signed
+    by anything; the gate reports whether it still matches, never whether it
+    was right.
+    """
+    records = (receipt or {}).get("attested")
+    if not isinstance(records, list) or not records:
         return
-
-    detail = "; ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
-
-    # THE REPAIRED CASE, and it has to come first. A receipt recording
-    # suspects on a lattice that no longer contains them is what a completed
-    # repair looks like: HAIR flagged the cells, minted a command row for each
-    # one, somebody pointed a remote at them and replaced the bad codes, and
-    # the wig arrived here clean. Printing "the comb found 8 suspects, that is
-    # the class that looks like it worked while landing on the wrong state"
-    # about that wig accuses somebody of the exact defect they just fixed by
-    # hand. It is also the first thing a successful repair would ever have
-    # seen from this gate.
-    #
-    # Only the classes this run can independently see count toward the
-    # judgment. A receipt whose remaining findings are all classes the gate
-    # does not reproduce gets the honest smaller sentence instead.
-    seen = {k: v for k, v in counts.items() if k in ours_by_class}
-    unseen = {k: v for k, v in counts.items() if k not in ours_by_class}
-    if seen and not ours:
-        healed = "; ".join(f"{k}: {v}" for k, v in sorted(seen.items()))
-        report.facts["comb"]["repaired"] = sum(seen.values())
-        report.facts["comb"]["unresolved"] = 0
-        report.ok(
-            f"combed{when}: {sum(seen.values())} suspect(s) recorded "
-            f"({healed}), none of which are still in this wig. That is what a "
-            f"completed repair looks like."
-        )
-        if unseen:
-            rest = "; ".join(f"{k}: {v}" for k, v in sorted(unseen.items()))
-            report.note(
-                f"the receipt also records {sum(unseen.values())} finding(s) "
-                f"in classes this gate does not reproduce ({rest}), so it can "
-                f"neither confirm nor clear those. Read the receipt."
+    current: dict[str, set[str]] = {}
+    for signal in wig.signals:
+        current.setdefault(signal.alias, set()).update({
+            hair.signal_row_digest(signal),
+            hair.row_digest(signal.pronto, 0, False),
+        })
+    matrix = getattr(wig, "climate", None)
+    if matrix is not None:
+        for cell in matrix.cells:
+            current.setdefault(hair.cell_key(cell), set()).add(
+                hair.row_digest(cell.pronto, 0, False)
             )
-        return
+    map_id = (report.facts.get("comb", {}).get("live") or {}).get("field_map")
+    map_version = hair.field_map_version(map_id)
 
-    still = "; ".join(
-        f"{k}: {v}" for k, v in sorted(seen.items()) if ours_by_class.get(k)
-    )
-    report.facts["comb"]["unresolved"] = ours
-    report.note(
-        f"the comb found {suspects} suspect(s){when}"
-        + (f" ({detail})" if detail else "")
-        + (f", and this run still sees {still}" if still else "")
-        + ". Read the receipt: combing sees things a fitting cannot, because "
-        "a checklist samples dimensions rather than cells."
-    )
-
-    findings = comb.get("findings")
-    neighbours = [
-        f
-        for f in (findings if isinstance(findings, list) else [])
-        if isinstance(f, dict) and f.get("check") == "duplicated-neighbour"
-    ]
-    if neighbours:
-        rows = [
-            " and ".join(f["keys"]) if isinstance(f.get("keys"), list) else "?"
-            for f in neighbours[:6]
-        ]
-        more = f"; and {len(neighbours) - 6} more" if len(neighbours) > 6 else ""
+    standing, expired = [], []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        target = record.get("target")
+        stamped = (record.get("map") or {}).get("version")
+        bytes_match = record.get("digest") in current.get(target, set())
+        map_match = stamped is None or map_version is None or stamped == map_version
+        (standing if bytes_match and map_match else expired).append(str(target))
+    report.facts["comb"]["attested"] = {"standing": standing, "expired": expired}
+    flagged = {k for f in live.findings for k in f.keys}
+    answered = sorted(set(standing) & flagged)
+    if standing:
         report.note(
-            f"{len(neighbours)} of those send a neighbour's code: "
-            f"{'; '.join(rows)}{more}. That is the class that looks like it "
-            f"worked while landing on the wrong state."
+            f"{len(standing)} finding(s) carry a person's answer in the receipt "
+            f"that still matches the current bytes"
+            + (f", including live findings on {', '.join(answered[:6])}"
+               if answered else "")
+            + ". The comb still doubts those codes and a person vouched for "
+            "them; both are true, and neither is signed."
         )
-    truncated = comb.get("truncated")
-    if isinstance(truncated, int) and truncated > 0:
+    if expired:
         report.note(
-            f"the receipt lists its findings up to a cap and omits "
-            f"{truncated} more. The counts describe the whole result."
+            f"{len(expired)} answer(s) in the receipt no longer match: the bytes "
+            f"or the field map changed since, so those findings are open again: "
+            f"{', '.join(expired[:6])}."
         )
 
 
@@ -1633,6 +2040,8 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
     addresses: set[int] = set()
 
     undecoded: list[str] = []
+    uncovered: list[str] = []
+    unverified: list[str] = []
 
     for signal in wig.signals:
         raw = hair.timings_from_pronto(signal.pronto)
@@ -1651,6 +2060,40 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
         identities[signal.alias] = identity
         protocols.add(identity.protocol)
         addresses.add(identity.address)
+
+        # DECODE TRUST (HAIR 0.14.2). A generated codebook rebuilds every code
+        # from its decoded label, so the label has to account for the whole
+        # capture or the integration transmits something nobody fitted. HAIR
+        # itself stopped rebuilding from such labels after it shipped an AC
+        # whose state codes did exactly that. A row pinned to raw is not
+        # rebuilt, so it is not asked.
+        if getattr(signal, "bypass_protocol", False):
+            continue
+        covered = hair.covers_capture(raw)
+        if covered is False:
+            uncovered.append(signal.alias)
+            report.fail(
+                f"signal '{signal.alias}': HAIR reads it as {identity.protocol}, "
+                f"but that label does not account for the whole capture. A "
+                f"codebook rebuilt from the label would transmit something "
+                f"other than what was fitted."
+            )
+        elif covered is None:
+            unverified.append(signal.alias)
+
+    if unverified:
+        report.note(
+            f"for {len(unverified)} signal(s) HAIR cannot say whether the label "
+            f"accounts for the whole capture ({', '.join(unverified[:6])}"
+            + (f"; and {len(unverified) - 6} more" if len(unverified) > 6 else "")
+            + "). That is HAIR's answer for a decoder whose frame accounting it "
+            "does not verify, usually upstream's. Not a refusal; the forward "
+            "and reverse checks still have to pass."
+        )
+    report.facts["decode_trust"] = {
+        "uncovered": uncovered,
+        "unverified": unverified,
+    }
 
     # signal_count is already recorded by the input gate; only the decoded
     # tally is new here, and the two being different is the whole point.
@@ -2155,22 +2598,33 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
                     f"  supersedes:    {chain[0]}"
                     + (f" (+{len(chain) - 1} older)" if len(chain) > 1 else "")
                 )
-            comb = report.facts.get("comb")
-            if comb:
-                repaired = comb.get("repaired")
-                if repaired:
-                    state = (
-                        f"{repaired} suspect(s) recorded and none still "
-                        f"present"
-                    )
-                else:
-                    state = f"{comb.get('suspects')} suspect(s)"
-                print(
-                    f"  combed:        {comb.get('date') or 'undated'}, "
-                    f"{state} (receipt, not independently verified)"
+            comb = report.facts.get("comb") or {}
+            live = comb.get("live")
+            if live:
+                mapped = (
+                    f", field map {live['field_map']} read "
+                    f"{live.get('readable')} of {live.get('codes')}"
+                    if live.get("field_map") else ""
                 )
-            else:
-                print("  combed:        no receipt")
+                print(
+                    f"  combed:        live with HAIR {live.get('hair')}, "
+                    f"{live.get('suspects')} suspect(s){mapped}"
+                )
+            stored = comb.get("receipt")
+            if stored:
+                print(
+                    f"  receipt:       {stored.get('date') or 'undated'}, "
+                    f"{stored.get('suspects')} suspect(s) (the file's own word)"
+                )
+            repairs = report.facts.get("repairs")
+            if repairs:
+                spread = ", ".join(
+                    f"{n} {t}" for t, n in repairs["tiers"].items()
+                )
+                print(
+                    f"  repaired:      {repairs['records']} code(s) ({spread}), "
+                    f"as the file states"
+                )
             recipe = report.facts.get("recipe") or {}
             if recipe.get("derived"):
                 counts = recipe.get("send_counts") or []
