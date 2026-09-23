@@ -10,6 +10,7 @@ of them, so each of these is checked on a wig nobody hand-built:
 - carrierless codes refuse
 - hair-wig/4 extra lattices refuse until the gate checks them
 - repair records and attestations are read, reported, and signed by nothing
+- on a matrix, a wrong-state finding nobody has answered refuses
 
     .venv/bin/python verify/test_gate.py
     .venv/bin/python verify/test_gate.py --hair /path/to/HAIR
@@ -25,8 +26,10 @@ import copy
 import json
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -207,6 +210,109 @@ def repair_that_did_not_take(hair: Hair) -> list[str]:
     return ["a repaired code the comb still flags must be called out"]
 
 
+WRONG_STATE_REFUSAL = "send a state other than the one on their label"
+
+
+class _Planted:
+    """A live comb report with extra findings planted in it.
+
+    No wig on the shelf has a wrong-state cell, which is the point of the
+    shelf, so the finding is planted on top of HAIR's real report for a
+    small synthetic matrix. Everything else the gate reads stays real.
+    """
+
+    def __init__(self, real: Any, extra: list[Any]) -> None:
+        self.findings = list(real.findings) + extra
+        self.coverage = real.coverage
+
+    @property
+    def suspects(self) -> int:
+        return sum(1 for f in self.findings if not f.advisory)
+
+    def counts(self) -> dict[str, int]:
+        return dict(Counter(f.check for f in self.findings if not f.advisory))
+
+
+def _planted_gate(
+    hair: Hair, data: dict[str, Any], key: str, check: str = "field-mismatch"
+) -> Report:
+    finding = SimpleNamespace(check=check, keys=[key], advisory=False)
+    original = hair.comb
+    hair.comb = lambda wig: _Planted(original(wig), [finding])  # type: ignore[method-assign]
+    try:
+        return gate(hair, data)
+    finally:
+        hair.comb = original  # type: ignore[method-assign]
+
+
+def _small_matrix() -> dict[str, Any]:
+    pronto = [s["pronto"] for s in load(CANDLE)["signals"][:4]]
+    return {
+        "format": "hair-wig/3",
+        "name": "Synthetic matrix",
+        "kind": "ac",
+        "signals": [],
+        "climate": {
+            "min_temp": 20,
+            "max_temp": 23,
+            "modes": ["cool"],
+            "fan_modes": ["auto"],
+            "off": pronto[0],
+            "cells": [
+                {"mode": "cool", "fan": "auto", "temp": 20 + i, "pronto": p}
+                for i, p in enumerate(pronto)
+            ],
+        },
+    }
+
+
+def _first_cell(hair: Hair, data: dict[str, Any]) -> tuple[str, str]:
+    """HAIR's key for the first cell, and the digest an answer would carry."""
+    wig = hair.wig_format.parse_wig(json.dumps(data)).wig
+    cell = wig.climate.cells[0]
+    return hair.cell_key(cell), hair.row_digest(cell.pronto, 0, False)
+
+
+def wrong_state_refuses_on_a_matrix(hair: Hair) -> list[str]:
+    data = _small_matrix()
+    key, _ = _first_cell(hair, data)
+    report = _planted_gate(hair, data, key)
+    problems = []
+    if not failed(report, WRONG_STATE_REFUSAL):
+        problems.append(f"an unanswered field-mismatch on {key} must refuse")
+    wrong = (report.facts.get("comb") or {}).get("wrong_state") or {}
+    if key not in wrong.get("unanswered", []):
+        problems.append(f"{key} should be listed as unanswered, got {wrong}")
+    return problems
+
+
+def answered_wrong_state_stands(hair: Hair) -> list[str]:
+    data = _small_matrix()
+    key, digest = _first_cell(hair, data)
+    data["comb"] = {
+        "suspects": 0,
+        "counts": {},
+        "attested": [{"key": "z", "target": key, "kind": "cell", "digest": digest}],
+    }
+    report = _planted_gate(hair, data, key)
+    wrong = (report.facts.get("comb") or {}).get("wrong_state") or {}
+    problems = []
+    if key not in wrong.get("answered", []) or key in wrong.get("unanswered", []):
+        problems.append(f"a standing answer on {key} should settle it, got {wrong}")
+    if any(key in line and WRONG_STATE_REFUSAL in line for line in report.failures):
+        problems.append(f"an answered cell must not be named in a refusal: {key}")
+    return problems
+
+
+def wrong_state_on_commands_only_notes(hair: Hair) -> list[str]:
+    report = _planted_gate(hair, load(CANDLE), "Power")
+    if failed(report, WRONG_STATE_REFUSAL):
+        return ["a command wig reports wrong-state findings and never refuses on them"]
+    if not said(report, "send a state other than the one they are labelled with"):
+        return ["a command wig should still note its wrong-state findings"]
+    return []
+
+
 def attestations_expire(hair: Hair) -> list[str]:
     data = load(DREO)
     target = next(s for s in data["signals"] if s["alias"] == "Speed Down")
@@ -240,6 +346,12 @@ SCENARIOS: list[tuple[str, Callable[[Hair], list[str]]]] = [
     ("a repair the comb still flags is called out", repair_that_did_not_take),
     ("attestations stand while their bytes match and expire when not",
      attestations_expire),
+    ("an unanswered wrong-state cell refuses a matrix",
+     wrong_state_refuses_on_a_matrix),
+    ("a standing answer settles a wrong-state cell",
+     answered_wrong_state_stands),
+    ("a wrong-state finding on a command wig notes and does not refuse",
+     wrong_state_on_commands_only_notes),
 ]
 
 

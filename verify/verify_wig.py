@@ -1448,10 +1448,9 @@ def check_comb(hair: Hair, wig: Any, report: Report) -> Any | None:
     3. **The gate's own checks** elsewhere in this file (lattice consistency,
        frame shape). The independent second opinion.
 
-    The output worth reading is wherever those disagree. This reports and
-    never refuses: whether an unanswered live finding should stop a build is
-    the owner's ruling to make, and until it is made the gate says what it
-    sees and lets the Perfect Fit and the gate's own checks decide.
+    The output worth reading is wherever those disagree. The live comb
+    reports, with one exception: on a matrix, a wrong-state finding nobody
+    has answered refuses (owner ruling 2026-09-23). See _refuse_wrong_state.
 
     Returns the live comb report, or None when the comb could not run.
     """
@@ -1461,6 +1460,7 @@ def check_comb(hair: Hair, wig: Any, report: Report) -> Any | None:
         _compare_receipt(live, receipt, report)
         _compare_with_ours(live, report)
         _attestations(hair, wig, live, receipt, report)
+        _refuse_wrong_state(wig, live, report)
     return live
 
 
@@ -1510,7 +1510,8 @@ def _comb_live(hair: Hair, wig: Any, report: Report) -> Any | None:
             f"({detail}). {'; '.join(examples)}{more}."
         )
         wrong = [f for f in suspects if f.check in COMB_WRONG_STATE]
-        if wrong:
+        # On a matrix these refuse, and _refuse_wrong_state names them.
+        if wrong and getattr(wig, "climate", None) is None:
             keys = sorted({k for f in wrong for k in f.keys})
             report.note(
                 f"{len(keys)} of those are codes that send a state other than "
@@ -1549,6 +1550,60 @@ def _comb_live(hair: Hair, wig: Any, report: Report) -> Any | None:
             f"verified too"
         )
     return live
+
+
+def _refuse_wrong_state(wig: Any, live: Any, report: Report) -> None:
+    """Refuse a matrix whose cells the live comb says land on the wrong state.
+
+    A wrong-state finding (``field-mismatch``, ``duplicated-neighbour``) on a
+    climate cell means the code sent for one label sets the unit to another.
+    A generated climate entity would then report the state it asked for
+    while the unit sits in a different one, and nothing downstream can tell.
+    The gate already refuses its own lattice defects of that kind, and HAIR
+    will not open a Perfect Fit while such a finding is open, so an
+    unanswered one refuses here too (owner ruling 2026-09-23).
+
+    Answered means what it means in HAIR's Detangle: a person's attestation
+    for that cell that still matches its current bytes and field-map version.
+    Answers are tracked per cell, as HAIR tracks them, so one answered cell
+    never answers its neighbour. Command wigs are unchanged: a flat command
+    either works or visibly does not, and the fitting covers that.
+    """
+    if getattr(wig, "climate", None) is None:
+        return
+    by_key: dict[str, set[str]] = {}
+    for finding in live.findings:
+        if finding.advisory or finding.check not in COMB_WRONG_STATE:
+            continue
+        for key in finding.keys:
+            by_key.setdefault(key, set()).add(finding.check)
+    if not by_key:
+        return
+    comb = report.facts.setdefault("comb", {})
+    standing = set((comb.get("attested") or {}).get("standing") or [])
+    unanswered = sorted(k for k in by_key if k not in standing)
+    answered = sorted(k for k in by_key if k in standing)
+    comb["wrong_state"] = {"unanswered": unanswered, "answered": answered}
+    if answered:
+        report.note(
+            f"{len(answered)} cell(s) the live comb says land on the wrong "
+            f"state carry a standing answer from a person, so they do not "
+            f"refuse: {', '.join(answered[:6])}"
+            + (f"; and {len(answered) - 6} more" if len(answered) > 6 else "")
+            + ". The answer is unsigned and the comb still doubts them."
+        )
+    if unanswered:
+        shown = ", ".join(
+            f"{key} ({', '.join(sorted(by_key[key]))})" for key in unanswered[:6]
+        )
+        more = f"; and {len(unanswered) - 6} more" if len(unanswered) > 6 else ""
+        report.fail(
+            f"the live comb says {len(unanswered)} cell(s) send a state other "
+            f"than the one on their label, and nobody has answered it: "
+            f"{shown}{more}. A climate entity built from this would report "
+            f"one state while the unit sits in another. Repair or answer them "
+            f"in HAIR's Needs attention, then save the wig again."
+        )
 
 
 def _read_receipt(wig: Any, report: Report) -> dict[str, Any] | None:

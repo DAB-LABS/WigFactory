@@ -193,11 +193,18 @@ warnings:
    for presets. Every lattice check here reads the main lattice only, so
    those codes would pass unchecked, and the gate refuses until it checks
    them too.
-9. **No row asks for a waveform that cannot exist.** Setting both
+9. **No climate cell lands on the wrong state unanswered.** When the live
+   comb says a cell sends a state other than the one on its label
+   (`field-mismatch`, `duplicated-neighbour`), a climate entity built from
+   it would report one state while the unit sits in another. That refuses
+   unless a person's answer to that cell still stands against its current
+   bytes (owner ruling 2026-09-23). Command wigs only get a note. See
+   "The comb, run live".
+10. **No row asks for a waveform that cannot exist.** Setting both
    `bypass_protocol` and a ditto count is a contradiction: only the encoder
    renders a repeat frame, so a bypassed row asking for one describes
    something nothing can produce.
-10. **The integration reproduces the transmit recipe**, when one is being
+11. **The integration reproduces the transmit recipe**, when one is being
     checked. See section 3.2.
 
 It also **counts distinct contributors**, and this is not the same as
@@ -298,11 +305,13 @@ So there are three layers, and each is labelled for what it is:
    opinion. Where the gate and the comb disagree about a class they both
    judge, the gate says that too.
 
-The live comb **reports and does not refuse**. A Perfect Fit made in HAIR
+The live comb **reports**, with one exception. A Perfect Fit made in HAIR
 0.14 or later could not open while a finding was open, so on a current wig
-a live finding means either a newer check or an answered one. Whether an
-unanswered live finding should stop a build, particularly a field mismatch
-on a lattice, is an open ruling.
+a live finding means either a newer check or an answered one. The
+exception is a wrong-state finding on a climate cell that nobody has
+answered: that refuses (owner ruling 2026-09-23). Answers count per cell,
+as HAIR's Detangle counts them, so an answer on one cell never settles its
+neighbour.
 
 Answers a person gave to a finding without changing bytes ("use it anyway",
 "keep both") ride in the receipt as attestations keyed to the bytes and the
