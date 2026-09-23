@@ -59,6 +59,7 @@ clone_or_update_core() {
     local paths=(
         homeassistant/components/infrared
         homeassistant/components/lg_infrared
+        homeassistant/components/climate
         homeassistant/components/esphome
         homeassistant/helpers
     )

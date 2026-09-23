@@ -57,6 +57,13 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from check_climate import (  # noqa: E402
+    check_climate_integration,
+    find_climate_component,
+)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_HAIR = REPO_ROOT / "reference" / "HAIR"
 DEFAULT_SHOP = REPO_ROOT / "reference" / "WigShop"
@@ -139,7 +146,10 @@ REQUIRED_HAIR_API = {
         "cell_key",
     ),
     "wig_fitting": ("bundle_is_complete",),
-    "wig_climate": ("dimension_checklist",),
+    "wig_climate": ("dimension_checklist", "resolve_cell"),
+    # A climate integration replays captured codes, and has to put exactly
+    # what HAIR would put on the wire, terminator included (GH #98).
+    "ir_command": ("ProntoCommand", "TerminatedCommand", "TERMINATOR_SPACE_US"),
     # The live comb (HAIR 0.9.1, field tier from 0.12.0). Read on every run
     # rather than trusting the receipt a file carries.
     "wig_comb": ("comb_wig",),
@@ -2644,6 +2654,14 @@ def print_report(report: Report, wig_path: Path, integration: Path | None) -> No
                 )
             else:
                 print("  send count:    not stated by the wig")
+            climate = report.facts.get("climate_integration") or {}
+            if climate:
+                print(
+                    f"  lattice:       {climate.get('states_walked')} requests "
+                    f"resolved as HAIR resolves them, "
+                    f"{climate.get('cells_reached')} of {climate.get('cells')} "
+                    f"cells reachable"
+                )
             cov = report.facts.get("coverage") or {}
             if cov:
                 print(
@@ -2727,9 +2745,24 @@ def main(argv: list[str] | None = None) -> int:
         wig = run_input_gate(hair, wig_path, report, args.require_handles)
         identities = decode_wig(hair, wig, report) if wig is not None else {}
 
+    climate_component = (
+        find_climate_component(args.integration)
+        if args.integration is not None else None
+    )
     if wig is not None and not args.gate_only:
         if args.integration is None:
             report.fail("no --integration given, so nothing was verified")
+        elif climate_component is not None or getattr(wig, "climate", None):
+            if climate_component is None:
+                report.fail(
+                    f"the wig is a climate lattice, and no lattice.json with a "
+                    f"lattice.py was found under {args.integration}"
+                )
+            else:
+                check_climate_integration(
+                    hair, wig, wig_path, climate_component, _load_module, report
+                )
+                check_send_count(climate_component, report)
         else:
             codes_path, decoder_path = find_integration_files(args.integration)
             if codes_path is None:

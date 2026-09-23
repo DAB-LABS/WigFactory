@@ -125,6 +125,12 @@ jobs:
       - name: Gate behaviour
         run: python verify/test_gate.py --hair reference/HAIR
 
+      # What the gate says about a climate integration: the lattice is the
+      # wig's, the resolver agrees with HAIR's on every state, and every code
+      # goes out as HAIR would send it. A synthetic lattice, broken on purpose.
+      - name: Climate integration checks
+        run: python verify/test_climate.py --hair reference/HAIR
+
       # Every wig in the shop, through the real input gate. Not a fixture: a
       # fixture cannot tell you the shop published something the factory
       # cannot read, and that is the interesting failure.
@@ -234,14 +240,19 @@ jobs:
       # The full gate, codec checks included, against every integration this
       # repository has already built. This is the leg that would have caught
       # the candle shipping without its ditto. A failure here is always ours:
-      # we built it, so it goes red on every event.
+      # we built it, so it goes red on every event. Found by manifest rather
+      # than by codes.py, because a climate integration has no codebook: it
+      # ships a lattice, and the gate works out which checks apply.
       - name: Verify each built integration against its wig
         run: |
           set -e
           shopt -s nullglob
           found=0
-          for codes in */*/custom_components/*/codes.py; do
-            integration="$(dirname "$(dirname "$(dirname "$codes")")")"
+          for manifest in */*/custom_components/*/manifest.json; do
+            integration="$(dirname "$(dirname "$(dirname "$manifest")")")"
+            # reference/ holds HAIR's own component, which is not ours to
+            # verify and has a manifest too.
+            case "$integration" in reference/*) continue ;; esac
             slug="$(basename "$(dirname "$integration")")"
             # Shop files may carry the -perfect-fit tier suffix; the device
             # slug never does. Accept either spelling.
