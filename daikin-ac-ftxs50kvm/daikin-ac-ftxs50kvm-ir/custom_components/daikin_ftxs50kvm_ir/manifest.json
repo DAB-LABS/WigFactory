@@ -1,0 +1,13 @@
+{
+  "domain": "daikin_ftxs50kvm_ir",
+  "name": "Daikin FTXS50KVM (Infrared)",
+  "codeowners": ["@DAB-LABS"],
+  "config_flow": true,
+  "dependencies": ["infrared"],
+  "documentation": "https://github.com/DAB-LABS/daikin-ac-ftxs50kvm-ir",
+  "integration_type": "device",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/DAB-LABS/daikin-ac-ftxs50kvm-ir/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

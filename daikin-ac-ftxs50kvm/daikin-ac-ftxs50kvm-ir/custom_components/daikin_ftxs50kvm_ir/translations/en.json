@@ -1,0 +1,52 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This air conditioner is already configured with that infrared emitter.",
+      "no_infrared_entities": "No infrared emitters were found. Set up an infrared integration first."
+    },
+    "step": {
+      "user": {
+        "title": "Set up the Daikin FTXS50KVM",
+        "description": "Choose the infrared emitter that can see the indoor unit.",
+        "data": {
+          "infrared_entity_id": "Infrared emitter",
+          "send_count": "Sends per change"
+        },
+        "data_description": {
+          "infrared_entity_id": "The blaster that sends codes to the air conditioner. It needs line of sight to the indoor unit.",
+          "send_count": "How many times each change transmits. Every code carries the whole state, so sending it again is harmless. Raise it if changes are sometimes missed."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Daikin FTXS50KVM options",
+        "data": {
+          "send_count": "Sends per change"
+        },
+        "data_description": {
+          "send_count": "How many times each change transmits. Every code carries the whole state, so sending it again is harmless. Raise it if changes are sometimes missed."
+        }
+      }
+    }
+  },
+  "entity": {
+    "climate": {
+      "daikin_ac": {
+        "state_attributes": {
+          "fan_mode": {
+            "state": {
+              "low": "Low",
+              "medium_low": "Medium low",
+              "medium": "Medium",
+              "medium_high": "Medium high",
+              "high": "High"
+            }
+          }
+        }
+      }
+    }
+  }
+}

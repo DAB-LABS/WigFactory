@@ -1,0 +1,35 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Run hassfest
+        uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      # This checks more than it documents. Beyond hacs.json and the
+      # manifest it wants an OSI license, a repository description, Issues
+      # enabled, at least one topic, and brand/icon.png in the integration
+      # directory. On a pull request from a fork it silently skips the
+      # repository level checks, so green here is weaker than green on a
+      # default store submission.
+      - name: Run HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
