@@ -250,9 +250,17 @@ of signals: a lattice of cells, one per complete device state. There is no
 codebook to build a second implementation of, so the checks are about the
 lattice contradicting itself, and on real files they find plenty.
 
-- **Completeness.** Home Assistant offers the user every combination of the
-  modes, fan modes and swing modes the integration advertises. A hole is not
-  a missing table row, it is a control that silently does nothing.
+- **Completeness, mode by mode.** A real unit does not offer every setting
+  in every mode: a dry mode often runs at one fan speed and one
+  temperature. So each mode is judged within its own settings, as HAIR's
+  comb judges it: every fan the mode uses, with every swing the mode uses,
+  must have a row, and every row in the mode must carry the same unbroken
+  run of temperatures. A mode with fewer settings passes, and the
+  integration offers only what that mode has. A hole inside a mode refuses,
+  because Home Assistant would offer it and it would silently do nothing.
+  (Until 2026-10-13 the gate demanded the full cross product of every mode,
+  fan, swing and temperature, and called the Komeco KOS-09QC 526 cells short
+  while HAIR found nothing missing.)
 - **Collapsed rows are a feature, not a fault.** A row where every
   temperature sends one code means the device ignores temperature there.
   Daikin does it in 19 rows of 40. The integration must not offer a
@@ -867,6 +875,28 @@ The details that are not obvious:
   swing_mode, temperature)` that the entity calls for every send. The gate
   calls the same method for every state the entity offers, plus off-grid and
   out-of-range temperatures, and requires HAIR's answer every time.
+- **When modes differ, the entity offers per mode.** If the wig's modes carry
+  different fans, swings or temperatures (a dry mode with one fan speed),
+  `Resolver.offers(hvac_mode)` must return what that mode has, as
+  `{"fan_modes": [...], "swing_modes": [...], "temperatures": [...]}` in Home
+  Assistant's words, and the entity updates its `fan_modes`, `swing_modes`
+  and temperature control from it when the mode changes. A mode with one
+  temperature offers no temperature control. The gate compares `offers` with
+  the wig mode by mode, refuses any difference, and refuses a lattice whose
+  modes differ when `offers` is missing. Read it straight off the lattice:
+
+  ```python
+  def offers(self, hvac_mode):
+      mode = HVAC_MODES.get(hvac_mode)
+      cells = [c for c in self.lattice.cells if c.mode == mode]
+      fans = [f for f in self.lattice.fan_modes if any(c.fan == f for c in cells)]
+      swings = [s for s in self.lattice.swing_modes if any(c.swing == s for c in cells)]
+      return {
+          "fan_modes": [ha_fan_mode(f) for f in fans],
+          "swing_modes": swings,
+          "temperatures": sorted({c.temp for c in cells if c.temp is not None}),
+      }
+  ```
 - **The entity's words are Home Assistant's; the lattice's stay verbatim.**
   `FAN_MODES`, `HVAC_MODES` and `SWING_MODES` map one onto the other, one to
   one, in the wig's order. Fan words have to be valid translation keys (no

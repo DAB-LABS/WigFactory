@@ -1825,30 +1825,79 @@ def check_matrix(hair: Hair, wig: Any, matrix: Any, report: Report) -> None:
 def _check_lattice_shape(
     hair: Hair, matrix: Any, cells: list[Any], report: Report
 ) -> None:
-    """Completeness and reachability.
+    """Completeness, judged mode by mode, the way HAIR judges it.
 
-    Home Assistant's climate entity offers the user every combination of the
-    modes, fan modes and swing modes the integration advertises. A hole in the
-    lattice is therefore not a missing row in a table, it is a control that
-    does nothing when somebody uses it, with no error and no log line.
+    A real air conditioner does not offer every setting in every mode. The
+    Komeco KOS-09QC's dry mode runs at one fan speed and one temperature;
+    its auto mode holds one temperature at every fan and swing. Demanding the
+    full cross product of every mode, fan, swing and temperature called that
+    lattice 526 cells short, while HAIR's own comb found nothing missing. The
+    factory was wrong, not the wig.
+
+    So each mode is judged within its own settings: every fan the mode uses,
+    with every swing the mode uses, must have a row, and every row in the
+    mode must carry the same unbroken run of temperatures at the file's
+    precision. A mode may use fewer settings than another, and the generated
+    integration then offers only what each mode has (``Resolver.offers``,
+    checked by check_climate.py). What still refuses is a hole inside a mode,
+    because Home Assistant would offer it and it would do nothing: a fan
+    speed missing one swing setting, or a temperature run with a gap (HAIR's
+    own example is Sharp's auto/auto going 18, 19, 21, 22).
     """
-    temps = sorted({c.temp for c in cells if c.temp is not None})
-    report.facts["temp_values"] = temps
+    temps_all = sorted({c.temp for c in cells if c.temp is not None})
+    report.facts["temp_values"] = temps_all
+    step = matrix.precision if matrix.precision and matrix.precision > 0 else 1.0
+
+    by_mode: dict[str, list[Any]] = {}
+    for cell in cells:
+        by_mode.setdefault(cell.mode, []).append(cell)
+    modes = [m for m in matrix.modes if m in by_mode]
+    modes += [m for m in by_mode if m not in modes]
+    empty = [m for m in matrix.modes if m not in by_mode]
 
     have = {(_axes(c), c.temp) for c in cells}
     missing: list[str] = []
-    for mode in matrix.modes:
-        for fan in matrix.fan_modes or [None]:
-            for swing in matrix.swing_modes or [None]:
-                for temp in temps or [None]:
-                    if ((mode, fan, swing), temp) not in have:
+    shapes: dict[str, dict[str, Any]] = {}
+    for mode in modes:
+        here = by_mode[mode]
+        fans = list(dict.fromkeys(c.fan for c in here))
+        swings = list(dict.fromkeys(c.swing for c in here))
+        temps = sorted({c.temp for c in here if c.temp is not None})
+        run: list[Any] = [None]
+        if temps:
+            run, want = [], temps[0]
+            while want <= temps[-1] + step / 10:
+                run.append(round(want, 4))
+                want += step
+        for fan in fans:
+            for swing in swings:
+                for temp in run:
+                    if temp is None:
+                        match = ((mode, fan, swing), None) in have
+                    else:
+                        match = any(
+                            ((mode, fan, swing), t) in have
+                            for t in temps
+                            if abs(t - temp) < step / 10
+                        )
+                    if not match:
                         missing.append(
                             "/".join(
-                                str(p)
-                                for p in (mode, fan, swing, temp)
+                                str(p) for p in (mode, fan, swing, temp)
                                 if p is not None
                             )
                         )
+        shapes[mode] = {
+            "fans": [f for f in fans if f is not None],
+            "swings": [s for s in swings if s is not None],
+            "temps": [t for t in run if t is not None],
+            "cells": len(here),
+        }
+    report.facts["mode_shapes"] = shapes
+    report.facts["per_mode"] = len({
+        (tuple(s["fans"]), tuple(s["swings"]), tuple(s["temps"]))
+        for s in shapes.values()
+    }) > 1
 
     duplicates = collections.Counter((_axes(c), c.temp) for c in cells)
     repeated = [k for k, n in duplicates.items() if n > 1]
@@ -1858,22 +1907,31 @@ def _check_lattice_shape(
             f"lattice. One state, one cell."
         )
 
+    if empty:
+        report.fail(
+            f"mode(s) {', '.join(empty)} are declared but have no cells. Home "
+            f"Assistant would offer them, and they would send nothing."
+        )
+
     if missing:
         report.facts["missing_cells"] = missing
         shown = ", ".join(missing[:6])
         more = f", and {len(missing) - 6} more" if len(missing) > 6 else ""
         report.fail(
-            f"{len(missing)} lattice cell(s) are missing: {shown}{more}. Home "
-            f"Assistant will offer the user every combination the integration "
-            f"advertises, so a hole is a control that silently does nothing."
+            f"{len(missing)} lattice cell(s) are missing inside a mode: "
+            f"{shown}{more}. Each is a setting the mode otherwise offers, so "
+            f"Home Assistant would offer it too, and it would do nothing."
         )
     else:
+        def describe(mode: str) -> str:
+            s = shapes[mode]
+            return (
+                f"{mode} {len(s['fans']) or 1} fan x {len(s['swings']) or 1} "
+                f"swing x {len(s['temps']) or 1} temp"
+            )
         report.ok(
-            f"lattice complete: {len(cells)} cell(s) cover every combination "
-            f"of {len(matrix.modes)} mode(s), "
-            f"{len(matrix.fan_modes) or 1} fan setting(s), "
-            f"{len(matrix.swing_modes) or 1} swing setting(s) and "
-            f"{len(temps)} temperature(s)"
+            f"lattice complete within every mode: {len(cells)} cell(s); "
+            + "; ".join(describe(m) for m in modes)
         )
 
 
