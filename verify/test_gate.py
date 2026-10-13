@@ -11,6 +11,8 @@ of them, so each of these is checked on a wig nobody hand-built:
 - hair-wig/4 extra lattices refuse until the gate checks them
 - repair records and attestations are read, reported, and signed by nothing
 - on a matrix, a wrong-state finding nobody has answered refuses
+- a lattice is judged complete mode by mode, as HAIR judges it: a dry mode
+  with one fan and one temperature passes, a hole inside a mode refuses
 
     .venv/bin/python verify/test_gate.py
     .venv/bin/python verify/test_gate.py --hair /path/to/HAIR
@@ -313,6 +315,91 @@ def wrong_state_on_commands_only_notes(hair: Hair) -> list[str]:
     return []
 
 
+def _mode_matrix(
+    shape: dict[str, tuple[list[str], list[str], list[int]]],
+    drop: set[str] | None = None,
+    declare: list[str] | None = None,
+) -> dict[str, Any]:
+    """A lattice built mode by mode: {mode: (fans, swings, temps)}.
+
+    ``drop`` removes cells by their "mode/fan/swing/temp" key, to make holes.
+    """
+    prontos = [s["pronto"] for s in load(CANDLE)["signals"]]
+    cells, n = [], 0
+    for mode, (fans, swings, temps) in shape.items():
+        for fan in fans:
+            for swing in swings:
+                for temp in temps:
+                    if f"{mode}/{fan}/{swing}/{temp}" in (drop or set()):
+                        continue
+                    cells.append({"mode": mode, "fan": fan, "swing": swing,
+                                  "temp": temp,
+                                  "pronto": prontos[n % len(prontos)]})
+                    n += 1
+    all_fans = list(dict.fromkeys(
+        fan for fans, _, _ in shape.values() for fan in fans))
+    all_swings = list(dict.fromkeys(
+        swing for _, swings, _ in shape.values() for swing in swings))
+    all_temps = [temp for _, _, temps in shape.values() for temp in temps]
+    return {
+        "format": "hair-wig/3", "name": "Synthetic modes", "kind": "ac",
+        "signals": [],
+        "climate": {
+            "min_temp": min(all_temps), "max_temp": max(all_temps),
+            "modes": declare or list(shape), "fan_modes": all_fans,
+            "swing_modes": all_swings, "off": prontos[0], "cells": cells,
+        },
+    }
+
+
+FULL = (["low", "high"], ["off", "both"], [20, 21, 22])
+MISSING = "lattice cell(s) are missing inside a mode"
+
+
+def sparse_modes_pass(hair: Hair) -> list[str]:
+    report = gate(hair, _mode_matrix({
+        "cool": FULL, "heat": FULL,
+        "dry": (["low"], ["off", "both"], [21]),
+        "heat_cool": (["low", "high"], ["off", "both"], [21]),
+    }))
+    problems = []
+    if failed(report, MISSING) or failed(report, "declared but have no cells"):
+        problems.append(f"a mode with fewer settings must pass, got {report.failures}")
+    if not said(report, "lattice complete within every mode"):
+        problems.append("the gate should say the lattice is complete per mode")
+    if not report.facts.get("per_mode"):
+        problems.append("the gate should record that the modes differ")
+    return problems
+
+
+def hole_inside_a_mode_refuses(hair: Hair) -> list[str]:
+    report = gate(hair, _mode_matrix(
+        {"cool": FULL, "dry": (["low"], ["off"], [21])},
+        drop={"cool/high/both/21"},
+    ))
+    if failed(report, MISSING) and said(report, "cool/high/both/21"):
+        return []
+    return [f"a missing cell inside cool must refuse, got {report.failures}"]
+
+
+def temperature_gap_refuses(hair: Hair) -> list[str]:
+    report = gate(hair, _mode_matrix(
+        {"cool": (["low"], ["off"], [20, 21, 23, 24])},
+    ))
+    if failed(report, MISSING) and said(report, "cool/low/off/22"):
+        return []
+    return [f"a gap in a temperature run must refuse, got {report.failures}"]
+
+
+def empty_declared_mode_refuses(hair: Hair) -> list[str]:
+    report = gate(hair, _mode_matrix(
+        {"cool": FULL}, declare=["cool", "dry"],
+    ))
+    if failed(report, "declared but have no cells"):
+        return []
+    return [f"a declared mode with no cells must refuse, got {report.failures}"]
+
+
 def attestations_expire(hair: Hair) -> list[str]:
     data = load(DREO)
     target = next(s for s in data["signals"] if s["alias"] == "Speed Down")
@@ -352,6 +439,10 @@ SCENARIOS: list[tuple[str, Callable[[Hair], list[str]]]] = [
      answered_wrong_state_stands),
     ("a wrong-state finding on a command wig notes and does not refuse",
      wrong_state_on_commands_only_notes),
+    ("a mode with fewer settings than the others passes", sparse_modes_pass),
+    ("a missing setting inside a mode refuses", hole_inside_a_mode_refuses),
+    ("a gap in a temperature run refuses", temperature_gap_refuses),
+    ("a declared mode with no cells refuses", empty_declared_mode_refuses),
 ]
 
 

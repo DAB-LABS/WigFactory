@@ -239,15 +239,119 @@ def _fan_translations(component: Path) -> set[str] | None:
     return found
 
 
+def _wig_offers(matrix: Any) -> dict[str, dict[str, list[Any]]]:
+    """What each mode of the wig actually carries: its fans, swings, temps.
+
+    Declared vocabulary order first, then anything observed and undeclared,
+    the same ordering HAIR's resolver uses.
+    """
+    def ordered(declared: list[Any], seen: list[Any]) -> list[Any]:
+        out = [v for v in declared if v in seen]
+        return out + [v for v in seen if v not in out]
+
+    by_mode: dict[str, list[Any]] = {}
+    for cell in matrix.cells:
+        by_mode.setdefault(cell.mode, []).append(cell)
+    offers: dict[str, dict[str, list[Any]]] = {}
+    for mode, cells in by_mode.items():
+        fans = list(dict.fromkeys(c.fan for c in cells if c.fan is not None))
+        swings = list(dict.fromkeys(c.swing for c in cells if c.swing is not None))
+        offers[mode] = {
+            "fans": ordered(list(matrix.fan_modes), fans),
+            "swings": ordered(list(matrix.swing_modes), swings),
+            "temps": sorted({float(c.temp) for c in cells if c.temp is not None}),
+        }
+    return offers
+
+
+def _check_offers(
+    resolver: Any,
+    mode_map: dict[str, str],
+    fan_map: dict[str, str],
+    wig: dict[str, dict[str, list[Any]]],
+    report: Any,
+) -> dict[str, dict[str, list[Any]]] | None:
+    """The integration's own statement of what each mode offers, checked.
+
+    Needed only when modes differ. Returns, per Home Assistant mode, the
+    states the entity offers in the wig's words, or None when the
+    integration does not say and has to.
+    """
+    per_mode = len({
+        (tuple(o["fans"]), tuple(o["swings"]), tuple(o["temps"]))
+        for o in wig.values()
+    }) > 1
+    offers_fn = getattr(resolver, "offers", None)
+    if offers_fn is None:
+        if per_mode:
+            report.fail(
+                "the wig's modes offer different settings (for example a dry "
+                "mode with one fan speed), and lattice.py does not say what "
+                "each mode offers. Add Resolver.offers(hvac_mode) and have "
+                "the entity show only those, or Home Assistant will offer "
+                "settings that do nothing."
+            )
+            return None
+        return {
+            ha: {"fans": wig[w]["fans"], "swings": wig[w]["swings"],
+                 "temps": wig[w]["temps"]}
+            for ha, w in mode_map.items() if w in wig
+        }
+
+    stated: dict[str, dict[str, list[Any]]] = {}
+    wrong: list[str] = []
+    for ha_mode, wig_mode in mode_map.items():
+        try:
+            raw = offers_fn(ha_mode)
+            fans = [fan_map.get(f, f) for f in raw["fan_modes"]]
+            swings = list(raw["swing_modes"])
+            temps = [float(x) for x in raw["temperatures"]]
+        except Exception as err:  # noqa: BLE001 - reported, and it is a refusal
+            wrong.append(f"{ha_mode} ({err!r})")
+            continue
+        want = wig.get(wig_mode)
+        if want is None or (fans, swings, temps) != (
+            want["fans"], want["swings"], want["temps"]
+        ):
+            wrong.append(ha_mode)
+        stated[ha_mode] = {"fans": fans, "swings": swings, "temps": temps}
+    if wrong:
+        report.fail(
+            f"Resolver.offers disagrees with what the wig carries for "
+            f"{', '.join(wrong)}. The entity must offer exactly the settings "
+            f"each mode has: no fewer, no more."
+        )
+        return None
+    report.ok(
+        "Resolver.offers matches the wig mode by mode: "
+        + "; ".join(
+            f"{m} {len(o['fans']) or 1} fan x {len(o['swings']) or 1} swing x "
+            f"{len(o['temps']) or 1} temp"
+            for m, o in stated.items()
+        )
+    )
+    return stated
+
+
 def _check_resolution(
     hair: Any, lattice_mod: Any, ours: Any, matrix: Any, report: Any
 ) -> None:
-    """Every state resolves exactly as HAIR resolves it."""
+    """Every state resolves exactly as HAIR resolves it.
+
+    Two walks over one set of requests. Agreement: every request, offered or
+    not, including off-grid and out-of-range temperatures, must resolve to
+    the cell HAIR's resolver picks. Landing: every state the entity offers,
+    mode by mode, must resolve to exactly itself, and together they must
+    reach every cell.
+    """
     resolve_hair = hair.wig_climate.resolve_cell
     resolver = lattice_mod.Resolver(ours)
     fan_map: dict[str, str] = dict(lattice_mod.FAN_MODES)
     mode_map: dict[str, str] = dict(lattice_mod.HVAC_MODES)
     swings = [s for s in lattice_mod.SWING_MODES if s in set(matrix.swing_modes)]
+    wig_to_ha_fan = {w: h for h, w in fan_map.items()}
+
+    offered = _check_offers(resolver, mode_map, fan_map, _wig_offers(matrix), report)
 
     grid = _temps(float(matrix.min_temp), float(matrix.max_temp),
                   float(matrix.precision or 1))
@@ -256,9 +360,6 @@ def _check_resolution(
 
     walked = 0
     disagreements: list[str] = []
-    snapped: list[str] = []
-    reached: set[tuple[Any, ...]] = set()
-
     for ha_mode, wig_mode in mode_map.items():
         for ha_fan in [*fan_map, None]:
             wig_fan = fan_map.get(ha_fan) if ha_fan is not None else None
@@ -269,28 +370,36 @@ def _check_resolution(
                     want = _cell_tuple(
                         resolve_hair(matrix, wig_mode, wig_fan, swing, temp)
                     )
-                    label = f"{ha_mode}/{ha_fan}/{swing}/{temp}"
                     if got != want:
-                        disagreements.append(label)
-                        continue
-                    advertised = (
-                        ha_fan is not None and swing is not None and temp in grid
-                    )
-                    if not advertised:
-                        continue
+                        disagreements.append(f"{ha_mode}/{ha_fan}/{swing}/{temp}")
+
+    snapped: list[str] = []
+    reached: set[tuple[Any, ...]] = set()
+    for ha_mode, offer in (offered or {}).items():
+        wig_mode = mode_map[ha_mode]
+        for wig_fan in offer["fans"] or [None]:
+            ha_fan = wig_to_ha_fan.get(wig_fan) if wig_fan is not None else None
+            for swing in offer["swings"] or [None]:
+                for temp in offer["temps"] or [None]:
+                    got = _cell_tuple(resolver.resolve(ha_mode, ha_fan, swing, temp))
+                    label = f"{ha_mode}/{ha_fan}/{swing}/{temp}"
                     if got is None:
                         snapped.append(f"{label} (nothing)")
                         continue
                     reached.add(got)
-                    if got[:4] != (wig_mode, wig_fan, swing, float(temp)):
+                    expect_temp = None if temp is None else float(temp)
+                    if got[:4] != (wig_mode, wig_fan, swing, expect_temp):
                         snapped.append(label)
 
     all_cells = {_cell_tuple(c) for c in matrix.cells}
-    unreached = all_cells - reached
+    unreached = all_cells - reached if offered is not None else set()
     report.facts["climate_integration"] = {
         "states_walked": walked,
         "cells": len(all_cells),
         "cells_reached": len(reached & all_cells),
+        "per_mode": offered is not None and any(
+            o != next(iter(offered.values())) for o in offered.values()
+        ),
         "resolver": getattr(lattice_mod, "RESOLVER_SOURCE", None),
     }
 
@@ -302,19 +411,19 @@ def _check_resolution(
         )
     if snapped:
         report.fail(
-            f"{len(snapped)} advertised state(s) do not land on themselves, "
+            f"{len(snapped)} offered state(s) do not land on themselves, "
             f"first {', '.join(snapped[:4])}. That is a control that does "
             f"something other than it says."
         )
     if unreached:
         report.fail(
-            f"{len(unreached)} cell(s) cannot be reached from any advertised "
+            f"{len(unreached)} cell(s) cannot be reached from any offered "
             f"state, so the user can never select them"
         )
-    if not (disagreements or snapped or unreached):
+    if offered is not None and not (disagreements or snapped or unreached):
         report.ok(
             f"resolver agrees with HAIR's on all {walked} requests walked, "
-            f"every advertised state lands on itself, and all "
+            f"every offered state lands on itself, and all "
             f"{len(all_cells)} cells are reachable"
         )
 

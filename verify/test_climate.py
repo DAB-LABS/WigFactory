@@ -14,6 +14,7 @@ gate to say so:
 - a fan word with no English name refuses
 - a code sent without the terminator refuses
 - a Fahrenheit lattice refuses
+- a lattice whose modes differ needs Resolver.offers, and offers must match
 
     .venv/bin/python verify/test_climate.py
     .venv/bin/python verify/test_climate.py --hair /path/to/HAIR
@@ -52,21 +53,29 @@ WIG_ID = "3f2b1c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 Patch = Callable[[Any], None]
 
 
-def synthetic_wig(unit: str | None = None) -> dict[str, Any]:
-    """A complete lattice over the Daikin's vocabulary, using the candle's codes."""
+def synthetic_wig(unit: str | None = None, dry: bool = False) -> dict[str, Any]:
+    """A complete lattice over the Daikin's vocabulary, using the candle's codes.
+
+    With ``dry``, a third mode that runs at one fan and one temperature, the
+    shape a real dry mode has (the Komeco's does).
+    """
     candle = json.loads(CANDLE.read_text(encoding="utf-8"))
     prontos = [s["pronto"] for s in candle["signals"]]
-    cells = []
-    for index, (mode, fan, swing, temp) in enumerate(
+    coordinates = list(
         itertools.product(("cool", "heat"), FANS, SWINGS, (20, 21, 22))
-    ):
+    )
+    if dry:
+        coordinates += [("dry", "low", "off", 21), ("dry", "low", "both", 21)]
+    cells = []
+    for index, (mode, fan, swing, temp) in enumerate(coordinates):
         cells.append({
             "mode": mode, "fan": fan, "swing": swing, "temp": temp,
             "pronto": prontos[index % len(prontos)],
         })
     climate: dict[str, Any] = {
         "min_temp": 20, "max_temp": 22, "precision": 1,
-        "modes": ["cool", "heat"], "fan_modes": FANS, "swing_modes": SWINGS,
+        "modes": ["cool", "heat"] + (["dry"] if dry else []),
+        "fan_modes": FANS, "swing_modes": SWINGS,
         "off": prontos[0], "cells": cells,
     }
     if unit is not None:
@@ -249,6 +258,67 @@ def fahrenheit_refuses(hair: Hair) -> list[str]:
     return [f"a Fahrenheit lattice must refuse, got {report.failures}"]
 
 
+def _with_dry(module: Any) -> None:
+    module.HVAC_MODES = {"cool": "cool", "heat": "heat", "dry": "dry"}
+
+
+def _reference_offers(module: Any) -> None:
+    """What an integration's Resolver.offers looks like: read off the lattice."""
+    _with_dry(module)
+
+    def offers(self: Any, hvac_mode: str) -> dict[str, list[Any]]:
+        mode = module.HVAC_MODES.get(hvac_mode)
+        cells = [c for c in self.lattice.cells if c.mode == mode]
+        fans = [f for f in self.lattice.fan_modes if any(c.fan == f for c in cells)]
+        swings = [
+            s for s in self.lattice.swing_modes if any(c.swing == s for c in cells)
+        ]
+        return {
+            "fan_modes": [module.ha_fan_mode(f) for f in fans],
+            "swing_modes": swings,
+            "temperatures": sorted({c.temp for c in cells if c.temp is not None}),
+        }
+
+    module.Resolver.offers = offers
+
+
+def modes_that_differ_need_offers(hair: Hair) -> list[str]:
+    report = run(hair, synthetic_wig(dry=True), patches={"lattice": _with_dry})
+    if failed(report, "does not say what each mode offers"):
+        return []
+    return [f"a dry mode with one fan needs offers(), got {report.failures}"]
+
+
+def matching_offers_pass(hair: Hair) -> list[str]:
+    report = run(hair, synthetic_wig(dry=True), patches={"lattice": _reference_offers})
+    problems = []
+    if report.failures:
+        problems.append(f"offers matching the wig should pass, got {report.failures}")
+    facts = report.facts.get("climate_integration") or {}
+    if facts.get("cells_reached") != 122:
+        problems.append(f"all 122 cells should be reachable, got {facts}")
+    return problems
+
+
+def wrong_offers_refuse(hair: Hair) -> list[str]:
+    def overclaim(module: Any) -> None:
+        _reference_offers(module)
+        honest = module.Resolver.offers
+
+        def offers(self: Any, hvac_mode: str) -> dict[str, list[Any]]:
+            out = honest(self, hvac_mode)
+            if hvac_mode == "dry":
+                out["fan_modes"] = ["low", "high"]
+            return out
+
+        module.Resolver.offers = offers
+
+    report = run(hair, synthetic_wig(dry=True), patches={"lattice": overclaim})
+    if failed(report, "Resolver.offers disagrees"):
+        return []
+    return [f"offering a fan the dry mode lacks must refuse, got {report.failures}"]
+
+
 SCENARIOS: list[tuple[str, Callable[[Hair], list[str]]]] = [
     ("a clean climate build passes every check", clean_build_passes),
     ("a lattice that is not the wig's refuses", tampered_lattice_refuses),
@@ -258,6 +328,9 @@ SCENARIOS: list[tuple[str, Callable[[Hair], list[str]]]] = [
     ("a fan word with no English name refuses", untranslated_fan_refuses),
     ("a code sent without the terminator refuses", missing_terminator_refuses),
     ("a Fahrenheit lattice refuses", fahrenheit_refuses),
+    ("modes that differ need Resolver.offers", modes_that_differ_need_offers),
+    ("offers that match the wig pass, mode by mode", matching_offers_pass),
+    ("offering a setting a mode lacks refuses", wrong_offers_refuse),
 ]
 
 
