@@ -8,6 +8,7 @@ wig, and sorts the results.
 
     verify/survey_shop.py
     verify/survey_shop.py --json
+    verify/survey_shop.py --markdown     (the weekly shelf report's summary)
 
 The output is a proposal, not an instruction. Read it, pick the wigs worth
 building, and build those. Nothing here generates anything and nothing here
@@ -80,12 +81,20 @@ _UNUSABLE_MARKERS = (
 
 
 def existing_builds(root: Path) -> set[str]:
-    """Stems the factory has already produced an integration for."""
+    """Stems the factory has already produced an integration for.
+
+    Found by manifest, the one file every integration has, whatever its
+    shape: a codebook build carries codes.py, a climate build carries
+    lattice.json, and looking for either one alone is how the Daikin read
+    as READY after it had been built and published. reference/ is skipped,
+    because HAIR's own component there has a manifest too.
+    """
     found: set[str] = set()
-    for codes in root.glob("*/*/custom_components/*/codes.py"):
-        found.add(codes.parents[2].parent.name)
-    for climate in root.glob("*/*/custom_components/*/cells.py"):
-        found.add(climate.parents[2].parent.name)
+    for manifest in root.glob("*/*/custom_components/*/manifest.json"):
+        device_dir = manifest.parents[2].parent
+        if device_dir.name == "reference" or device_dir.parent.name == "reference":
+            continue
+        found.add(device_dir.name)
     return found
 
 
@@ -152,6 +161,45 @@ def survey(hair: Hair, shop: Path, root: Path) -> list[dict[str, Any]]:
 
 ORDER = ("READY", "DEFECTS", "UNSUPPORTED", "UNUSABLE", "BUILT")
 
+# What each bucket means to the person reading the weekly report, in one line.
+MEANING = {
+    "READY": "passes every check and has no integration yet. Yours to pick.",
+    "DEFECTS": "the wig's own codes contradict themselves. Fixed at the shop "
+    "or in HAIR, never here.",
+    "UNSUPPORTED": "may be perfectly good, but uses something the factory "
+    "cannot build or check yet.",
+    "UNUSABLE": "will not parse, or nothing on it vouches for the codes.",
+    "BUILT": "already has an integration here.",
+}
+
+
+def print_markdown(
+    rows: list[dict[str, Any]], provenance: dict[str, str] | None, hair: Hair
+) -> None:
+    """The survey as a GitHub job summary: one table per bucket."""
+    shop = (
+        f"`{provenance['short']}` ({provenance['date']})" if provenance else "unknown"
+    )
+    print("## Wig Shop shelf\n")
+    print(f"{len(rows)} wig(s) in the shop at {shop}, judged by HAIR {hair.version}.\n")
+    for bucket in ORDER:
+        here = [r for r in rows if r["bucket"] == bucket]
+        if not here:
+            continue
+        print(f"### {bucket} ({len(here)})\n")
+        print(f"{MEANING[bucket]}\n")
+        print("| Wig | Brand | Size | Protocol | Accounts | Why |")
+        print("|---|---|---|---|---:|---|")
+        for r in here:
+            shape = r["shape"] or "?"
+            size = f"{r['rows']} {'cells' if shape == 'matrix' else 'signals'}"
+            why = "<br>".join(line[:200].replace("|", "/") for line in r["why"][:3])
+            print(
+                f"| `{r['slug']}` | {r['brand'] or '?'} | {size} | "
+                f"{r.get('protocol') or ''} | {r['accounts']} | {why} |"
+            )
+        print()
+
 
 def print_survey(rows: list[dict[str, Any]], provenance: dict[str, str] | None) -> None:
     if provenance:
@@ -193,7 +241,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hair", type=Path, default=DEFAULT_HAIR)
     parser.add_argument("--shop", type=Path, default=DEFAULT_SHOP)
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
-    parser.add_argument("--json", action="store_true")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--json", action="store_true")
+    output.add_argument("--markdown", action="store_true")
     args = parser.parse_args(argv)
 
     shop = args.shop.resolve()
@@ -207,8 +257,13 @@ def main(argv: list[str] | None = None) -> int:
     provenance = shop_provenance(shop)
     if args.json:
         print(json.dumps({"shop": provenance, "wigs": rows}, indent=2))
+    elif args.markdown:
+        print_markdown(rows, provenance, hair)
     else:
         print_survey(rows, provenance)
+    # Always 0 once a survey exists. A wig the factory cannot build from is a
+    # finding about the shelf, not a failure of this script; only reaching no
+    # survey at all (environment_exit, 3) is.
     return 0
 
 

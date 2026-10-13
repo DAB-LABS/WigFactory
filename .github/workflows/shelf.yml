@@ -1,0 +1,78 @@
+name: Shelf report
+
+# What on the Wig Shop shelf could the factory build today? The answer is a
+# table in this run's summary: READY, BUILT, and the wigs that need work at
+# the shop or in HAIR, each with its reason.
+#
+# It reports and never goes red because of a wig. A wig the factory cannot
+# build from is a true statement about somebody else's repository, and a red
+# X for it is noise nobody here can act on (owner ruling 2026-10-13,
+# reversing the weekly-red ruling of 2026-08-17). This workflow fails only
+# when it could not produce a report at all, which is a factory problem.
+#
+# Whether the factory itself is healthy is ci.yml's question, not this one's.
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shelf:
+    name: Survey the shelf
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      # The shelf is judged by the same pinned HAIR a build would be judged
+      # by, so READY here means READY for a build today.
+      - name: Read the HAIR pin
+        id: hair
+        run: echo "ref=$(tr -d '[:space:]' < verify/HAIR_REF)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out HAIR
+        uses: actions/checkout@v7
+        with:
+          repository: DAB-LABS/HAIR
+          ref: ${{ steps.hair.outputs.ref }}
+          path: reference/HAIR
+
+      - name: Check out the Wig Shop
+        uses: actions/checkout@v7
+        with:
+          repository: DAB-LABS/WigShop
+          path: reference/WigShop
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install the verification dependencies
+        run: pip install -r verify/requirements.txt
+
+      # The survey exits 0 whatever it finds on the shelf, and 3 only when it
+      # could not run (HAIR missing or too old, a dependency not installed).
+      - name: Survey the shelf
+        run: |
+          python verify/survey_shop.py --markdown > shelf.md
+          cat shelf.md >> "$GITHUB_STEP_SUMMARY"
+          cat shelf.md
+
+      # A notice, never a failure: the pin is a choice, and moving it is a
+      # one-line pull request once CI is green against the new release.
+      - name: Say whether the HAIR pin is behind
+        run: |
+          pin="${{ steps.hair.outputs.ref }}"
+          latest="$(git ls-remote --tags --refs https://github.com/DAB-LABS/HAIR 'v*' \
+            | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
+          if [ -n "$latest" ] && [ "$latest" != "$pin" ]; then
+            echo "::notice title=HAIR pin is behind::Pinned $pin, latest release $latest. Bump verify/HAIR_REF in a pull request."
+            printf '\nHAIR pin is behind: pinned %s, latest release %s.\n' "$pin" "$latest" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "HAIR pin $pin is the latest release."
+          fi

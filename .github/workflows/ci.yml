@@ -1,22 +1,19 @@
 name: CI
 
-# The repository whose whole job is gating other people's code had no gate on
-# its own. Two changes shipped in one evening carrying a dead constant, an
-# unused import and a stale fact name, and the only thing that caught any of
-# it was a person running ruff by hand.
+# Is the factory broken? That is the only question this workflow answers, and
+# red here always means there is work to do in THIS repository:
 #
-# Two kinds of red live here and they must never look alike:
+#   - lint fails on the factory's own tooling
+#   - the gate's tests fail: digest parity, gate behaviour, climate checks
+#   - an integration built here no longer passes the full gate against its
+#     wig in the shop (the wig changed, or we broke something)
 #
-#   - OUR fault: lint, digest parity, the gate crashing or not starting, a
-#     built integration failing its own gate. Red on every event.
-#   - THEIR data: a wig on the shelf the factory cannot build from. That is
-#     a true statement about somebody else's repository, not a defect in this
-#     one, so it annotates on push and pull request and goes red only on the
-#     weekly run (owner ruling 2026-08-17). Otherwise one bad wig on the shelf
-#     turns every pull request here red until somebody else fixes it.
-#
-# verify_wig.py exits 1 for a refusal and 3 for no verdict at all, which is
-# what lets the sweep below tell the two apart.
+# What is on the Wig Shop shelf, and which wigs the factory could build, is a
+# different question about somebody else's repository. It lives in
+# shelf.yml, which reports and never goes red because of a wig. Until
+# 2026-10-13 this workflow gated every shelf wig and went red every Monday
+# for wigs nobody here could fix (owner ruling 2026-08-17, reversed
+# 2026-10-13).
 
 on:
   push:
@@ -24,9 +21,9 @@ on:
   pull_request:
   # The drift alarm. HAIR is somebody else's repository and it moves, and the
   # failure mode is silent: the gate does not get quieter when HAIR changes,
-  # it gets wrong. The scheduled run is the one job that checks out HAIR at
-  # main rather than at the pin, so the pin can be stale without anybody
-  # finding out mid-publish.
+  # it gets wrong. The scheduled run checks out HAIR at main rather than at
+  # the pin. Red on a Monday therefore means HAIR main changed something the
+  # factory depends on, which is ours to adapt to before the next pin bump.
   schedule:
     - cron: "0 5 * * 1"
 
@@ -55,24 +52,24 @@ jobs:
       - name: Lint the factory's tooling
         run: ruff check verify publish
 
-  gate:
-    name: Gate on ${{ matrix.python }}
+  tests:
+    name: Tests on ${{ matrix.python }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         # 3.13 is the floor, matching HAIR's own requires-python. The two legs
         # resolve different upstream decoders (infrared-protocols 5.x on
-        # 3.13, 8.x on 3.14), so running both is what shows a wig reads the
-        # same under each.
+        # 3.13, the newest allowed on 3.14), so running both is what shows
+        # the gate reads the same under each.
         python: ["3.13", "3.14"]
     steps:
       - name: Check out
         uses: actions/checkout@v7
 
-      # verify/HAIR_REF is the one place the pin lives; setup.sh reads the
-      # same file. A wig is judged by a released HAIR that does not move
-      # under it, except on the weekly run, which judges it by HAIR main.
+      # verify/HAIR_REF is the one place the pin lives; setup.sh and
+      # shelf.yml read the same file. Tests run against a released HAIR that
+      # does not move under them, except on the weekly run (HAIR main).
       - name: Decide which HAIR to judge against
         id: hair
         run: |
@@ -90,12 +87,6 @@ jobs:
           repository: DAB-LABS/HAIR
           ref: ${{ steps.hair.outputs.ref }}
           path: reference/HAIR
-
-      - name: Check out the Wig Shop
-        uses: actions/checkout@v7
-        with:
-          repository: DAB-LABS/WigShop
-          path: reference/WigShop
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -130,74 +121,6 @@ jobs:
       # goes out as HAIR would send it. A synthetic lattice, broken on purpose.
       - name: Climate integration checks
         run: python verify/test_climate.py --hair reference/HAIR
-
-      # Every wig in the shop, through the real input gate. Not a fixture: a
-      # fixture cannot tell you the shop published something the factory
-      # cannot read, and that is the interesting failure.
-      - name: Survey the shop
-        run: python verify/survey_shop.py
-
-      # EVERY wig, then decide. A survey that stops at the first bad answer is
-      # not one: on 2026-08-17 the Dreo fan refused under `set -e` and nothing
-      # after it in the glob was gated at all.
-      - name: Gate every wig the shop publishes
-        run: |
-          shopt -s nullglob
-          found=0
-          refused=()
-          broken=()
-          for wig in reference/WigShop/wigs/*/*.wig.json; do
-            found=1
-            name="$(basename "$wig")"
-            echo "::group::$name"
-            # No --require-handles: the account count is reported, never
-            # enforced. Whether a wig is proven widely enough to publish is a
-            # judgment the owner makes at publish time.
-            rc=0
-            python verify/verify_wig.py --wig "$wig" --gate-only || rc=$?
-            echo "::endgroup::"
-            case "$rc" in
-              0) ;;
-              1) refused+=("$name") ;;
-              *) broken+=("$name (exit $rc)") ;;
-            esac
-          done
-
-          if [ "$found" = "0" ]; then
-            echo "::error::No wigs found in the shop clone. That is not a pass."
-            exit 1
-          fi
-
-          status=0
-          if [ "${#broken[@]}" -gt 0 ]; then
-            echo
-            echo "${#broken[@]} wig(s) the gate could not reach a verdict on:"
-            for name in "${broken[@]}"; do
-              echo "  $name"
-              echo "::error title=No verdict on $name::The gate crashed or could not start. That is a factory problem, not a finding about the wig."
-            done
-            status=1
-          fi
-
-          if [ "${#refused[@]}" -gt 0 ]; then
-            echo
-            echo "${#refused[@]} wig(s) on the shelf the factory cannot build from:"
-            if [ "${{ github.event_name }}" = "schedule" ]; then
-              level=error
-              status=1
-            else
-              level=warning
-            fi
-            for name in "${refused[@]}"; do
-              echo "  $name"
-              echo "::$level title=Gate refused $name::See the $name group above. Red only on the weekly run."
-            done
-          fi
-
-          if [ "$status" = "0" ] && [ "${#refused[@]}" = "0" ]; then
-            echo "Every wig in the shop passes the input gate."
-          fi
-          exit "$status"
 
   built:
     name: Built integrations
@@ -238,20 +161,23 @@ jobs:
         run: pip install -r verify/requirements.txt
 
       # The full gate, codec checks included, against every integration this
-      # repository has already built. This is the leg that would have caught
-      # the candle shipping without its ditto. A failure here is always ours:
-      # we built it, so it goes red on every event. Found by manifest rather
-      # than by codes.py, because a climate integration has no codebook: it
-      # ships a lattice, and the gate works out which checks apply.
+      # repository has built. This is the leg that would have caught the
+      # candle shipping without its ditto. Every failure here is ours: we
+      # built it, so it is red on every event. Found by manifest, because a
+      # climate integration has no codes.py.
+      #
+      # Every integration is checked before deciding, so one failure never
+      # hides another. A built integration whose wig has left the shelf is
+      # red too: the published repository now points at a source nobody can
+      # read, and that is ours to resolve with update_integration.py.
       - name: Verify each built integration against its wig
         run: |
-          set -e
           shopt -s nullglob
-          found=0
+          failed=()
+          checked=0
           for manifest in */*/custom_components/*/manifest.json; do
             integration="$(dirname "$(dirname "$(dirname "$manifest")")")"
-            # reference/ holds HAIR's own component, which is not ours to
-            # verify and has a manifest too.
+            # reference/ holds HAIR's own component, which has a manifest too.
             case "$integration" in reference/*) continue ;; esac
             slug="$(basename "$(dirname "$integration")")"
             # Shop files may carry the -perfect-fit tier suffix; the device
@@ -259,15 +185,23 @@ jobs:
             matches=(reference/WigShop/wigs/*/"$slug".wig.json
                      reference/WigShop/wigs/*/"$slug"-perfect-fit.wig.json)
             if [ "${#matches[@]}" = "0" ]; then
-              echo "::warning::No shop wig for $slug; $integration was not verified"
+              echo "::error title=$slug has no wig on the shelf::$integration was built from a wig the shop no longer carries."
+              failed+=("$slug (no wig on the shelf)")
               continue
             fi
-            found=1
+            checked=$((checked + 1))
             echo "::group::$slug"
+            rc=0
             python verify/verify_wig.py --wig "${matches[0]}" \
-              --integration "$integration"
+              --integration "$integration" || rc=$?
             echo "::endgroup::"
+            if [ "$rc" != "0" ]; then
+              echo "::error title=$slug fails the gate::See the $slug group above (exit $rc)."
+              failed+=("$slug (exit $rc)")
+            fi
           done
-          if [ "$found" = "0" ]; then
-            echo "No built integration matched a shop wig."
+          echo "$checked built integration(s) checked against their wigs."
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf '  failing: %s\n' "${failed[@]}"
+            exit 1
           fi
