@@ -54,39 +54,48 @@ These apply to everything you write here.
 
 ### What CI checks, and what it does not
 
-`.github/workflows/ci.yml` runs ruff over `verify/` and `publish/`, the recipe
-and digest parity vectors, and the real input gate over every wig the shop
-publishes, on Python 3.13 and 3.14. A fourth job runs the FULL gate, codec
-checks included, against every integration already built here.
+There are two workflows, and they answer different questions.
+
+**`ci.yml`: is the factory broken?** On every push, pull request and once a
+week it runs ruff over `verify/` and `publish/`; the gate's own tests
+(digest parity, gate behaviour, the climate checks) on Python 3.13 and 3.14;
+and the FULL gate against every integration already built here, against its
+wig in the shop. Red always means work in this repository: our code broke, or
+a built integration no longer matches its wig (the wig changed, or left the
+shelf), which `update_integration.py` resolves.
+
+**`shelf.yml`: what could the factory build?** Weekly, and on demand from the
+Actions tab, it runs `verify/survey_shop.py` over the whole shop and writes the
+result to the run summary: READY, BUILT, DEFECTS, UNSUPPORTED, UNUSABLE, each
+with its reason. It never goes red because of a wig. A wig the factory cannot
+build from is a fact about somebody else's repository, and until 2026-10-13
+it turned the weekly run red for months for wigs nobody here could fix (the
+2026-08-17 weekly-red ruling, reversed by the owner on 2026-10-13). The shelf
+report also says, as a notice, when a newer HAIR release exists than the pin.
 
 **HAIR is pinned, except once a week.** `verify/HAIR_REF` names the HAIR
 release the gate judges against, and it is the one place the pin lives:
-`setup.sh` reads the same file. A wig should be judged by a HAIR that does
-not move underneath it. The weekly scheduled run is the exception: it checks
-out HAIR at `main`, so a stale pin shows up as a red X on a Monday morning
-rather than as a surprise mid-publish. That run exists because of 0.9.5,
-which removed `fitting_rows`: nothing went red, the gate simply started
-dying on a traceback.
+`setup.sh` and `shelf.yml` read the same file. The weekly `ci.yml` run is the
+exception: it runs the tests and the built-integration check against HAIR
+`main`, so a change in HAIR that the factory has to adapt to shows up as a red
+X before anybody bumps the pin, rather than mid-publish. That run exists
+because of 0.9.5, which removed `fitting_rows`: nothing went red, the gate
+simply started dying on a traceback.
 
-The pin is deliberately ours rather than the Wig Shop's. The shop pins its
-own `HAIR_REF` for its own checks. Ours has to be at least 0.14.2, where HAIR
-started reporting whether a decoded label accounts for its whole capture,
-because the factory rebuilds codes from labels. Bump it by hand in a pull
-request, one line.
+The pin is deliberately ours rather than the Wig Shop's. It has to be at least
+0.14.2, where HAIR started reporting whether a decoded label accounts for its
+whole capture, because the factory rebuilds codes from labels. Bump it by hand
+in a pull request, one line, once CI is green against the new release.
 
 **Two kinds of red, and they must never look alike.** The gate exits 1 when
 it refuses a wig and 3 when it reached no verdict at all: HAIR missing or too
-old, a dependency not installed, or the gate itself crashing. Our own faults
-(lint, parity, a crash, a built integration failing its gate) are red on
-every event. A wig on the shelf the factory cannot build from is a true
-statement about somebody else's repository, so it annotates on push and pull
-request and goes red only on the weekly run. Otherwise one bad wig on the
-shelf would turn every pull request here red until somebody else fixed it.
+old, a dependency not installed, or the gate itself crashing. The survey
+always exits 0 once it has produced a survey, whatever is on the shelf.
 
 That split is not decoration. From 24 August to 22 September 2026 every
 weekly run died on a missing dependency (PyYAML, needed by HAIR's comb since
 0.12.0) before it gated a single wig, and it looked exactly like the red X a
-bad wig produces. Nobody read it.
+bad wig produced. Nobody read it.
 
 CI does not pass `--require-handles`. The account count is reported, never
 enforced, and whether a wig is proven widely enough to publish is a judgment
