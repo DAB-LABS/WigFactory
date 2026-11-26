@@ -1,4 +1,4 @@
-"""Step 4 for a climate integration: the lattice, the resolver, the wire.
+"""Stage 5 for a climate integration: the lattice, the resolver, the wire.
 
 A codebook integration is checked by encoding every button and decoding it
 back. A climate integration has no codebook. It ships the wig's lattice as
