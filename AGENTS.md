@@ -931,6 +931,17 @@ The details that are not obvious:
   86 degrees Celsius. Keep the assumed state in `extra_restore_state_data`,
   in Celsius and the entity's own words. Found on the test box, which runs
   imperial.
+- **Serve the temperatures under the names the running Home Assistant
+  reads.** 2026.11 reads `native_temperature_unit` and
+  `native_target_temperature`, warns at import about an entity that
+  provides the older `temperature_unit`, `target_temperature` or their
+  `_attr_` shorthands, and drops the older names in 2027.11. Keep the
+  setpoint in a private attribute and provide one set of properties,
+  chosen once at import from
+  `hasattr(ClimateEntity, "native_temperature_unit")`, until `hacs.json`'s
+  minimum is 2026.11. `verify/test_climate_names.py` loads every built
+  climate integration against both shapes and refuses a class that
+  provides both, or anything 2026.11 would warn about.
 
 The gate runs these checks when it finds a `lattice.json` beside a
 `lattice.py`, instead of the codebook ones.

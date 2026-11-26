@@ -122,6 +122,13 @@ jobs:
       - name: Climate integration checks
         run: python verify/test_climate.py --hair reference/HAIR
 
+      # A built climate entity against Home Assistant's two climate shapes:
+      # 2026.11 renamed the temperature members, warns about the older names
+      # and drops them in 2027.11. One set of names on each shape, nothing
+      # 2026.11 would warn about, and the same readings on both.
+      - name: Climate entity temperature names
+        run: python verify/test_climate_names.py
+
   built:
     name: Built integrations
     runs-on: ubuntu-latest
