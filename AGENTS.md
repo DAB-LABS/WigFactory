@@ -536,6 +536,15 @@ The details that are not obvious
 - **Restore from the entity's own stored data, never from state
   attributes.** Keep the assumed state in `extra_restore_state_data`, in
   Celsius and the entity's own words.
+- **Serve the temperatures under the names the running Home Assistant
+  reads.** Keep the setpoint in a private attribute and provide one set of
+  properties, chosen once at import from
+  `hasattr(ClimateEntity, "native_temperature_unit")`:
+  `native_temperature_unit` and `native_target_temperature` on 2026.11 and
+  later, `temperature_unit` and `target_temperature` before. Never set
+  `_attr_temperature_unit` or `_attr_target_temperature`. The switch comes
+  out once `hacs.json`'s minimum is 2026.11
+  ([why](docs/background.md#climate-integrations)).
 
 The gate runs the climate checks when it finds a `lattice.json` beside a
 `lattice.py`, instead of the codebook ones.
@@ -613,6 +622,10 @@ For a codebook integration it checks:
 For a climate integration it checks that `lattice.json` is the wig's, that
 `Resolver.resolve` agrees with HAIR's on every state, that `offers` matches
 each mode, and that every code goes out as HAIR would send it (4.3).
+`verify/test_climate_names.py`, in CI's tests job, loads every built climate
+entity against a Home Assistant 2026.10 and a 2026.11 climate shape and
+refuses a class that provides both sets of temperature names, or anything
+2026.11 would warn about.
 
 ### 5.2 The bench check
 
@@ -790,6 +803,7 @@ ruff check verify publish
 .venv/bin/python verify/test_recipe.py --hair reference/HAIR
 .venv/bin/python verify/test_gate.py --hair reference/HAIR
 .venv/bin/python verify/test_climate.py --hair reference/HAIR
+.venv/bin/python verify/test_climate_names.py
 ```
 
 All green, on 3.13 and 3.14 if you touched anything that reads upstream

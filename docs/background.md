@@ -481,6 +481,18 @@ installation's unit system, so on an imperial install a saved target of 86
 reads back as 86 degrees Celsius. Found on the test box, which runs
 imperial.
 
+**The temperature names.** Home Assistant 2026.11 renamed the climate
+entity's temperature members to `native_temperature_unit` and
+`native_target_temperature`, and the older names stop working in 2027.11.
+An entity that still provides the older ones is logged at import, and each
+line that reads or writes `_attr_target_temperature` is logged again, every
+message asking the user to report it to the integration's author. The
+Daikin FTXS50KVM shipped that way in 0.1.0 and logged seven warnings on
+2026.11.3 with nothing about its wig changed, the first published
+integration to go stale on Home Assistant alone. 0.1.1 fixed it (#18). One
+set of names, chosen at import, keeps 2026.6 to 2026.10 seeing the entity
+exactly as before, and providing both would have 2026.11 warn anyway.
+
 ### The README
 
 A confidently wrong manufacturer is worse than an honest unknown, and much
