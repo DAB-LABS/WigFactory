@@ -45,6 +45,13 @@ from .lattice import FAN_MODES, HVAC_MODES, SWING_MODES, Cell, ha_fan_mode
 
 PARALLEL_UPDATES = 1
 
+# Home Assistant 2026.11 serves the climate temperature members as
+# native_temperature_unit and native_target_temperature, and warns when an
+# entity provides the older names. Provide the native names when the base
+# class has them and the older names otherwise, never both. Remove the
+# switch once hacs.json's minimum Home Assistant is 2026.11.
+_NATIVE_TEMPERATURE = hasattr(ClimateEntity, "native_temperature_unit")
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -103,7 +110,6 @@ class DaikinClimate(
     _attr_translation_key = "daikin_ac"
     _attr_assumed_state = True
     _attr_should_poll = False
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.FAN_MODE
@@ -144,7 +150,23 @@ class DaikinClimate(
         self._last_on_mode: HVACMode = first_mode
         self._attr_fan_mode = ha_fan_mode(start.fan) if start else None
         self._attr_swing_mode = start.swing if start else None
-        self._attr_target_temperature = start.temp if start else None
+        self._target_temp: float | None = start.temp if start else None
+
+    def _declared_unit(self) -> str:
+        """Return the unit every temperature here is in, the lattice's Celsius."""
+        return UnitOfTemperature.CELSIUS
+
+    def _get_target_temperature(self) -> float | None:
+        """Return the setpoint last sent, or the one the next Turn on sends."""
+        return self._target_temp
+
+    # Exactly one set of names, chosen at import (see _NATIVE_TEMPERATURE).
+    if _NATIVE_TEMPERATURE:
+        native_temperature_unit = property(_declared_unit)
+        native_target_temperature = property(_get_target_temperature)
+    else:
+        temperature_unit = property(_declared_unit)
+        target_temperature = property(_get_target_temperature)
 
     @property
     def extra_restore_state_data(self) -> _AssumedState:
@@ -154,7 +176,7 @@ class DaikinClimate(
             last_on_mode=self._last_on_mode,
             fan_mode=self._attr_fan_mode,
             swing_mode=self._attr_swing_mode,
-            temperature=self._attr_target_temperature,
+            temperature=self._target_temp,
         )
 
     @override
@@ -177,7 +199,7 @@ class DaikinClimate(
         if saved.swing_mode in self._attr_swing_modes:
             self._attr_swing_mode = saved.swing_mode
         if saved.temperature is not None:
-            self._attr_target_temperature = min(
+            self._target_temp = min(
                 max(saved.temperature, self._attr_min_temp), self._attr_max_temp
             )
 
@@ -233,7 +255,7 @@ class DaikinClimate(
         self._last_on_mode = hvac_mode
         self._attr_fan_mode = ha_fan_mode(cell.fan)
         self._attr_swing_mode = cell.swing
-        self._attr_target_temperature = cell.temp
+        self._target_temp = cell.temp
         self.async_write_ha_state()
 
     @override
@@ -243,7 +265,7 @@ class DaikinClimate(
             hvac_mode,
             self._attr_fan_mode,
             self._attr_swing_mode,
-            self._attr_target_temperature,
+            self._target_temp,
         )
 
     @override
@@ -253,11 +275,7 @@ class DaikinClimate(
         hvac_mode: HVACMode | None = kwargs.get(ATTR_HVAC_MODE)
         if hvac_mode is not None:
             self._valid_mode_or_raise("hvac", hvac_mode, self.hvac_modes)
-        target = (
-            float(temperature)
-            if temperature is not None
-            else self._attr_target_temperature
-        )
+        target = float(temperature) if temperature is not None else self._target_temp
         mode = hvac_mode or self._attr_hvac_mode or HVACMode.OFF
         if mode == HVACMode.OFF:
             # Nothing to send while off; the next Turn on sends it.
@@ -265,7 +283,7 @@ class DaikinClimate(
                 await self._async_apply(
                     HVACMode.OFF, self._attr_fan_mode, self._attr_swing_mode, target
                 )
-            self._attr_target_temperature = target
+            self._target_temp = target
             self.async_write_ha_state()
             return
         await self._async_apply(
@@ -283,7 +301,7 @@ class DaikinClimate(
             self._attr_hvac_mode,
             fan_mode,
             self._attr_swing_mode,
-            self._attr_target_temperature,
+            self._target_temp,
         )
 
     @override
@@ -297,7 +315,7 @@ class DaikinClimate(
             self._attr_hvac_mode,
             self._attr_fan_mode,
             swing_mode,
-            self._attr_target_temperature,
+            self._target_temp,
         )
 
     @override
