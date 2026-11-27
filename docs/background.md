@@ -614,6 +614,41 @@ without a version bump,** because Home Assistant shows the manifest version
 to users and HACS tracks the release tag, so a change that moves neither
 means somebody's install quietly stops matching what it says it is.
 
+### Keeping published integrations current
+
+The Daikin FTXS50KVM shipped as 0.1.0 on 2026-09-27 and was correct. Home
+Assistant 2026.11 then renamed the climate entity's temperature members, and
+every install of 0.1.0 on 2026.11 logged seven warnings, each asking the
+user to report it to the integration's author, with the old names due to
+stop working in 2027.11. Nothing about the wig had changed. Three things
+were watching and none of them said so: the gate only asks whether an
+integration matches its wig; `ci.yml` runs the gate; and the published
+repository's own weekly hassfest and HACS runs check the manifest and the
+repository shape, and neither imports the integration's Python. The
+warnings were found by somebody reading a log. 0.1.1 fixed it (#18).
+
+So `integrations.yml` loads every built integration, every week, in the
+Home Assistant releases a user might be on: the oldest its `hacs.json` still
+promises, the newest stable, and the newest beta, which is the one that
+gives a few weeks' warning. It installs the infrared library at exactly the
+version that release pins, because that is what an install runs, not what
+this repository's requirements resolve to. Only what the integration itself
+causes counts: Home Assistant's own deprecation messages about the
+integration do, and Python's warnings about Home Assistant's or a library's
+own code do not, because nothing here can act on them and a leg that is red
+for somebody else's reason teaches everybody to ignore red.
+
+**Why issues.** The scheduled `ci.yml` run, the drift alarm, did its job on
+2026-11-16 and went red, and nobody saw it for eleven days, because a red X
+on a scheduled run notifies nobody. An issue does. The same reasoning moved
+the shelf report's "pin is behind" notice into an issue: the pin sat on
+v0.17.2 through twelve HAIR releases with that notice showing every week.
+
+**Why releases still ask.** The job can tell that something is wrong and
+the factory can fix it, but a release reaches every install that takes the
+update. A compatibility change is still a change in somebody's house, so
+`--merge` stays on the owner's word.
+
 ### Upstream, and the line the factory does not cross
 
 Upstream asks that a library contribution links a core pull request, even a
