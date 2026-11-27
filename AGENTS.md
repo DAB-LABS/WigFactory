@@ -753,6 +753,42 @@ The `Built integrations` job in CI goes red when a built integration no
 longer matches its wig, or its wig has left the shelf. This command is how
 that red gets resolved.
 
+### Keeping it current with Home Assistant
+
+An integration can go stale with nothing about its wig changed: Home
+Assistant renames something, and every install starts logging about it.
+`integrations.yml` checks for that every Monday
+([why](docs/background.md#keeping-published-integrations-current)). For each
+built integration it installs, in turn, the newest patch of the minimum in
+its `hacs.json`, the newest stable Home Assistant and the newest beta when
+one is ahead, each with the infrared library that release pins, and runs:
+
+```bash
+python verify/load_in_ha.py --integration <device>/<repo>
+```
+
+That imports every module, sets the entry up through the integration's own
+`async_setup_entry`, adds every entity and drives it as a user would, and
+fails on anything logged at warning or worse that is the integration's.
+Python's own warnings about Home Assistant's or a library's code are listed
+and not counted.
+
+**Passes when** every leg loads clean. A failing leg opens an issue labelled
+`ha-compat`, titled with the repository and the Home Assistant minor release,
+or refreshes the one already open; the first passing leg closes it.
+
+**When one opens:** fix it in the factory tree, never in the published
+repository. Add or extend a test that holds the line for every later build,
+as `verify/test_climate_names.py` does for the climate temperature names.
+Merge the factory pull request, then `update_integration.py --push`. **The
+release (`--merge`) waits for the owner's word, every time,** even when the
+change is only about Home Assistant.
+
+When the oldest Home Assistant worth supporting moves, one factory pull
+request raises `hacs.json` in every integration and removes the switches
+that kept the older releases working, and each goes out as a release of its
+own. The floor leg says when nothing still needs the older branch.
+
 ### When it is proven
 
 Independent fittings from distinct GitHub handles, on the shipped
@@ -793,6 +829,16 @@ wig in the shop. **Red always means work in this repository.**
 demand. It never goes red because of a wig, only when it could not produce a
 report at all.
 
+**`integrations.yml`: does every built integration still load in the Home
+Assistant people run?** Stage 7, weekly and on demand.
+
+**Scheduled reds open issues.** A red X on a schedule notifies nobody. The
+scheduled `ci.yml` run keeps one issue labelled `drift` open while it fails,
+`integrations.yml` one per integration and release labelled `ha-compat`, and
+`shelf.yml` one labelled `hair-pin` while the pin is behind HAIR's latest
+release. Each closes itself when its check passes. `verify/ci_issue.py`
+does the opening and closing, with the workflow's own token.
+
 **The HAIR pin.** `verify/HAIR_REF` names the HAIR release the gate judges
 against, and it is the one place the pin lives. The weekly `ci.yml` run
 judges against HAIR `main` instead, as a drift alarm: red on a Monday means
@@ -808,7 +854,13 @@ ruff check verify publish
 .venv/bin/python verify/test_gate.py --hair reference/HAIR
 .venv/bin/python verify/test_climate.py --hair reference/HAIR
 .venv/bin/python verify/test_climate_names.py
+.venv/bin/python verify/test_load_plan.py
 ```
+
+If you touched `verify/load_in_ha.py`, also run it against every built
+integration in a virtual environment with Home Assistant installed
+(`pip install homeassistant==<release>`, then the output of
+`load_in_ha.py --requirements <path>`).
 
 All green, on 3.13 and 3.14 if you touched anything that reads upstream
 decoders.

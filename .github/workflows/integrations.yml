@@ -1,0 +1,93 @@
+name: Home Assistant compatibility
+
+# Does every integration this factory has built still load quietly in the
+# Home Assistant people run? Not a question about wigs: the Daikin FTXS50KVM
+# went stale in 2026.11 with nothing about its wig changed, logging seven
+# warnings on every install, while the gate, ci.yml and the published
+# repository's own hassfest and HACS runs all stayed green. None of them
+# loads the integration's Python. verify/load_in_ha.py does.
+#
+# One leg per built integration and Home Assistant release: the newest patch
+# of the minimum in its hacs.json, the newest stable release, and the newest
+# beta when one is ahead of stable. A failing leg opens an issue, or
+# refreshes the one it already has, and a passing leg closes it. Fixes land
+# in the factory first and reach the published repository through
+# publish/update_integration.py, released on the owner's word.
+
+on:
+  schedule:
+    - cron: "30 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan the legs
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Read hacs.json and the Home Assistant releases
+        id: plan
+        run: python verify/load_in_ha.py --plan >> "$GITHUB_OUTPUT"
+
+  load:
+    name: ${{ matrix.repo }} on ${{ matrix.ha }}
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      # The infrared library at exactly the version this release pins, since
+      # that is what a user's install runs.
+      - name: Install Home Assistant ${{ matrix.ha }}
+        run: |
+          pip install "homeassistant==${{ matrix.ha }}"
+          python verify/load_in_ha.py --requirements "${{ matrix.path }}" > requirements-leg.txt
+          pip install -r requirements-leg.txt
+
+      - name: Load and drive the integration
+        id: load
+        run: |
+          python verify/load_in_ha.py --integration "${{ matrix.path }}" --report report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Keyed on the minor release, so an issue opened against a beta carries
+      # on when that release ships, and closes the first week it passes.
+      - name: Say so in an issue
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ matrix.repo }} on Home Assistant ${{ matrix.minor }}
+        run: |
+          if [ "${{ steps.load.outcome }}" = "success" ]; then
+            python verify/ci_issue.py --title "$TITLE" --label ha-compat --passing
+          else
+            [ -s report.md ] || echo "The leg failed before the integration was loaded; the run log says where." > report.md
+            python verify/ci_issue.py --title "$TITLE" --label ha-compat \
+              --label-description "A built integration does not load clean in a Home Assistant release" \
+              --failing --body-file report.md
+          fi

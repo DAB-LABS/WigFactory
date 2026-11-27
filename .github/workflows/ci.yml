@@ -129,6 +129,12 @@ jobs:
       - name: Climate entity temperature names
         run: python verify/test_climate_names.py
 
+      # Which Home Assistant releases integrations.yml loads every built
+      # integration in, from hacs.json and a release list. Wrong legs would
+      # be green for the wrong reason.
+      - name: Compatibility job planner
+        run: python verify/test_load_plan.py
+
   built:
     name: Built integrations
     runs-on: ubuntu-latest
@@ -211,4 +217,46 @@ jobs:
           if [ "${#failed[@]}" -gt 0 ]; then
             printf '  failing: %s\n' "${failed[@]}"
             exit 1
+          fi
+
+  # A red X on a schedule notifies nobody: this run went red on 2026-11-16
+  # and stayed red, unread, for eleven days. So the scheduled run also keeps
+  # one issue, opened or refreshed when any job above fails and closed the
+  # first week they all pass. Pushes and pull requests show their red where
+  # somebody is already looking, so they leave the issue alone.
+  drift-issue:
+    name: Report the drift alarm
+    if: ${{ github.event_name == 'schedule' && !cancelled() }}
+    needs: [lint, tests, built]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Open, refresh or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: Weekly CI against HAIR main is failing
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failed="$(python -c 'import json, os; print(" ".join(n for n, j in json.loads(os.environ["RESULTS"]).items() if j["result"] != "success"))')"
+          if [ -z "$failed" ]; then
+            python verify/ci_issue.py --title "$TITLE" --label drift --passing
+          else
+            {
+              echo "The scheduled CI run judges the factory against HAIR \`main\` rather than the pin, to catch a change in HAIR before the pin moves to it. These jobs did not pass: ${failed}."
+              echo
+              echo "The job logs say what broke. If HAIR changed something the factory depends on, adapt the factory in a pull request before the next pin bump."
+            } > drift.md
+            python verify/ci_issue.py --title "$TITLE" --label drift \
+              --label-description "The factory against HAIR main" \
+              --failing --body-file drift.md
           fi

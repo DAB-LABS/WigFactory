@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   shelf:
@@ -63,9 +64,15 @@ jobs:
           cat shelf.md >> "$GITHUB_STEP_SUMMARY"
           cat shelf.md
 
-      # A notice, never a failure: the pin is a choice, and moving it is a
-      # one-line pull request once CI is green against the new release.
+      # Never a failure: the pin is a choice, and moving it is a one-line
+      # pull request once CI is green against the new release. But a notice
+      # on a scheduled run is read by nobody, and the pin sat twelve releases
+      # behind for seven weeks, so being behind keeps one issue open until it
+      # is not.
       - name: Say whether the HAIR pin is behind
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: The HAIR pin is behind the latest release
         run: |
           pin="${{ steps.hair.outputs.ref }}"
           latest="$(git ls-remote --tags --refs https://github.com/DAB-LABS/HAIR 'v*' \
@@ -73,6 +80,11 @@ jobs:
           if [ -n "$latest" ] && [ "$latest" != "$pin" ]; then
             echo "::notice title=HAIR pin is behind::Pinned $pin, latest release $latest. Bump verify/HAIR_REF in a pull request."
             printf '\nHAIR pin is behind: pinned %s, latest release %s.\n' "$pin" "$latest" >> "$GITHUB_STEP_SUMMARY"
+            printf 'verify/HAIR_REF pins HAIR %s and the latest release is %s.\n\nMove the pin in a pull request once CI is green against %s: the tests and the built integrations, on both Python legs.\n' "$pin" "$latest" "$latest" > pin.md
+            python verify/ci_issue.py --title "$TITLE" --label hair-pin \
+              --label-description "verify/HAIR_REF is behind HAIR's latest release" \
+              --failing --body-file pin.md || true
           else
             echo "HAIR pin $pin is the latest release."
+            python verify/ci_issue.py --title "$TITLE" --label hair-pin --passing || true
           fi
