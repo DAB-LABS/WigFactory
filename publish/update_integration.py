@@ -41,11 +41,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _common import (  # noqa: E402
+    COMMIT_IDENTITY,
     DEFAULT_HAIR,
     DEFAULT_SHOP,
     OWNER,
     GitHub,
     Refusal,
+    factory_files,
     git,
     manifest_of,
     provenance_lines,
@@ -53,25 +55,10 @@ from _common import (  # noqa: E402
     run_the_gate,
 )
 
-SKIP = {".git", "__pycache__", ".DS_Store"}
-
-
-def _walk(root: Path) -> set[Path]:
-    """Every file under ``root``, relative, ignoring noise."""
-    found: set[Path] = set()
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root)
-        if any(part in SKIP for part in rel.parts):
-            continue
-        found.add(rel)
-    return found
-
 
 def compare(factory: Path, published: Path) -> dict[str, list[str]]:
     """What this update would change, in three buckets."""
-    ours, theirs = _walk(factory), _walk(published)
+    ours, theirs = factory_files(factory), factory_files(published)
     changed = sorted(
         str(p)
         for p in ours & theirs
@@ -86,7 +73,7 @@ def compare(factory: Path, published: Path) -> dict[str, list[str]]:
 
 def apply_factory_tree(factory: Path, published: Path) -> None:
     """Overwrite what the factory owns. Never remove what it does not."""
-    for rel in sorted(_walk(factory)):
+    for rel in sorted(factory_files(factory)):
         target = published / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(factory / rel, target)
@@ -185,8 +172,7 @@ def main(argv: list[str] | None = None) -> int:
             provenance = provenance_lines(facts)
             git(
                 clone,
-                "-c", "user.name=WigFactory",
-                "-c", "user.email=noreply@localhost",
+                *COMMIT_IDENTITY,
                 "commit", "-q", "-m",
                 f"Update to {version} from the factory\n\n"
                 + "\n".join(provenance) + "\n",

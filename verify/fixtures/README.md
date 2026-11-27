@@ -9,6 +9,7 @@ a test. Taken at WigShop `bdb71a2` (2026-09-16). The shop's wigs are CC0.
 | `sanmli-candles-th05.wig.json` | RC5, signed, every label covers its capture. The clean case. |
 | `dreo-fan-dr-haf004s-perfect-fit.wig.json` | Stored comb receipt says 0 suspects; a live comb with current HAIR flags Oscillate Horizontal. |
 | `winix-fan-5500-perfect-fit.wig.json` | NEC through upstream decoders, whose frame accounting HAIR cannot verify. |
+| `dewenwils-outlet-hrs103w-perfect-fit.wig.json` | A hair-wig/5 wig of 433.92 MHz radio codes, taken at WigShop `1251360` (2026-11-24). Something the factory cannot build, not a defect. |
 
 These are regression fixtures, not the shelf. If a shelf wig is later
 superseded, these stay as they are: the point is that the gate's answer about

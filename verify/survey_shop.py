@@ -64,6 +64,7 @@ from verify_wig import (  # noqa: E402
 _UNSUPPORTED_MARKERS = (
     "extra lattice(s) (hair-wig/4)",
     "carry no carrier",
+    "radio code(s) (hair-wig/5)",
 )
 _UNUSABLE_MARKERS = (
     "does not parse",

@@ -26,10 +26,10 @@ pyyaml>=6.0
 # a false statement about a good wig, so the gate refuses to start rather
 # than run without it (verify_wig.Hair).
 #
-# The range is HAIR's (0.17.2's pyproject). It resolves to 5.8.1 on Python
-# 3.13 and the newest 9.x on 3.14, because 8.x and later declare
-# Requires-Python >=3.14. CI runs both legs, so both upstream versions are
-# exercised against the same wigs. Home Assistant itself has moved on to
-# 10.x; the gate passed every check against 10.2.0 on 2026-10-13, and this
-# follows HAIR when HAIR lifts its cap.
-infrared-protocols>=5.6,<10.0
+# The range is HAIR's (1.4.0's pyproject), which no longer caps it: at run
+# time HAIR uses whatever version the installed Home Assistant pins, and
+# Home Assistant 2026.11 ships 10.5.0. It resolves to 5.8.1 on Python 3.13,
+# because 8.x and later declare Requires-Python >=3.14, and to the newest
+# release on 3.14. CI runs both legs, so both are exercised against the
+# same wigs, and the gate records which one it used.
+infrared-protocols>=5.6.1

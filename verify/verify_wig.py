@@ -821,6 +821,7 @@ def run_input_gate(
         report.fail(f"duplicate aliases in the wig: {', '.join(duplicates)}")
 
     _check_carrierless(hair, wig, report)
+    _check_radio(wig, report)
 
     if matrix is not None:
         _check_extras(matrix, report)
@@ -1338,6 +1339,44 @@ def _check_carrierless(hair: Hair, wig: Any, report: Report) -> None:
         f"sent unmodulated: {shown}. It is not yet established that a "
         f"generated integration can send one that way, so nothing is built "
         f"from this wig until it is."
+    )
+
+
+def is_radio(signal: Any) -> bool:
+    """A radio row (hair-wig/5, HAIR 1.2.0): its code is ``rf``, not Pronto.
+
+    Read off the shape, as HAIR's own ``is_radio_signal`` does, so a HAIR
+    from before radio, whose signals carry no ``rf`` at all, reads every row
+    as infrared.
+    """
+    return getattr(signal, "rf", None) is not None
+
+
+def _check_radio(wig: Any, report: Report) -> None:
+    """Refuse radio rows by name, as a limit of this factory.
+
+    HAIR 1.2.0 hears and sends radio codes, and a hair-wig/5 wig carries them
+    beside infrared ones. This factory builds infrared integrations: the
+    medium is in the repository name and the domain (-ir), and the generated
+    code sends through Home Assistant's infrared platform. A radio row has no
+    Pronto to decode and nothing here could send it, so without this check it
+    surfaced as "Pronto does not convert to timings", which reads as a broken
+    wig when the wig is fine and the factory is the one that cannot.
+    """
+    radio = [s for s in wig.signals if is_radio(s)]
+    if not radio:
+        return
+    report.facts["radio_rows"] = len(radio)
+    shown = ", ".join(
+        f"{s.alias} ({s.rf.frequency_hz / 1e6:.2f} MHz)" for s in radio[:6]
+    )
+    if len(radio) > 6:
+        shown += f"; and {len(radio) - 6} more"
+    report.fail(
+        f"{len(radio)} radio code(s) (hair-wig/5): {shown}. This factory builds "
+        f"infrared integrations. A radio one needs its own medium in the name "
+        f"and the domain (-rf) and a send path through Home Assistant's "
+        f"radio_frequency platform, and neither exists here yet."
     )
 
 
@@ -2112,6 +2151,9 @@ def decode_wig(hair: Hair, wig: Any, report: Report) -> dict[str, Any]:
     unverified: list[str] = []
 
     for signal in wig.signals:
+        if is_radio(signal):
+            # Refused by name in the input gate. Nothing to decode.
+            continue
         raw = hair.timings_from_pronto(signal.pronto)
         if raw is None:
             report.fail(f"signal '{signal.alias}': Pronto does not convert to timings")
