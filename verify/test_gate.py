@@ -13,6 +13,8 @@ of them, so each of these is checked on a wig nobody hand-built:
 - on a matrix, a wrong-state finding nobody has answered refuses
 - a lattice is judged complete mode by mode, as HAIR judges it: a dry mode
   with one fan and one temperature passes, a hole inside a mode refuses
+- a radio row (hair-wig/5) refuses by name, as something this factory cannot
+  build, and the survey files the wig as unsupported rather than defective
 
     .venv/bin/python verify/test_gate.py
     .venv/bin/python verify/test_gate.py --hair /path/to/HAIR
@@ -36,6 +38,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from survey_shop import classify  # noqa: E402
 from verify_wig import (  # noqa: E402
     DEFAULT_HAIR,
     Hair,
@@ -48,6 +51,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CANDLE = "sanmli-candles-th05.wig.json"
 DREO = "dreo-fan-dr-haf004s-perfect-fit.wig.json"
 WINIX = "winix-fan-5500-perfect-fit.wig.json"
+DEWENWILS = "dewenwils-outlet-hrs103w-perfect-fit.wig.json"
 
 
 def load(name: str) -> dict[str, Any]:
@@ -139,6 +143,19 @@ def carrierless_refuses(hair: Hair) -> list[str]:
     if failed(report, "carry no carrier"):
         return []
     return [f"a 0100 code must refuse, got {report.failures}"]
+
+
+def radio_rows_refuse_by_name(hair: Hair) -> list[str]:
+    report = gate(hair, load(DEWENWILS))
+    problems = []
+    if not failed(report, "radio code(s) (hair-wig/5)"):
+        problems.append(f"a radio row must refuse by name, got {report.failures}")
+    if failed(report, "Pronto does not convert"):
+        problems.append("a radio row was still read as a Pronto code")
+    bucket, _ = classify(report, "dewenwils-outlet-hrs103w", set())
+    if bucket != "UNSUPPORTED":
+        problems.append(f"surveyed as {bucket}, wants UNSUPPORTED: {report.failures}")
+    return problems
 
 
 def extras_refuse(hair: Hair) -> list[str]:
@@ -428,6 +445,8 @@ SCENARIOS: list[tuple[str, Callable[[Hair], list[str]]]] = [
     ("a label that does not cover its capture refuses", uncovered_label_refuses),
     ("a carrierless code refuses", carrierless_refuses),
     ("a hair-wig/4 extras lattice refuses until it is checked", extras_refuse),
+    ("a radio row refuses by name and surveys as unsupported",
+     radio_rows_refuse_by_name),
     ("repair records are read, counted, published, and signed by nothing",
      repairs_are_read_and_unsigned),
     ("a repair the comb still flags is called out", repair_that_did_not_take),

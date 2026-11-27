@@ -36,8 +36,10 @@ __all__ = [
     "MEDIUM_SUFFIX",
     "OWNER",
     "REPO_ROOT",
+    "COMMIT_IDENTITY",
     "Refusal",
     "describe",
+    "factory_files",
     "git",
     "manifest_of",
     "provenance_lines",
@@ -48,6 +50,18 @@ __all__ = [
 
 
 OWNER = "DAB-LABS"
+
+# Who the factory's commits in a published repository are by: the owner's
+# account, under GitHub's no-reply address, as every other commit there is.
+# Until 2026-11-26 they read "WigFactory <noreply@localhost>", an address
+# GitHub cannot tie to anybody.
+COMMIT_IDENTITY = (
+    "-c", "user.name=DAB-LABS",
+    "-c", "user.email=128871138+DAB-LABS@users.noreply.github.com",
+)
+
+# Never published, whatever else the factory ignores or not.
+SKIP_PARTS = {".git", "__pycache__", ".DS_Store"}
 
 # The medium, and the reason the domain carries it too. RF is the obvious
 # second one.
@@ -526,6 +540,42 @@ def repo_name_for(wig: str) -> str:
     ``verify_wig.TIER_SUFFIXES``.
     """
     return f"{device_stem(wig)}{MEDIUM_SUFFIX}"
+
+
+def factory_files(integration: Path) -> set[Path]:
+    """The files under ``integration`` that are the factory's to publish.
+
+    Everything except the noise in SKIP_PARTS and whatever this repository's
+    .gitignore ignores. Without the second half, a lint or test run inside
+    the integration leaves a cache (.ruff_cache, .pytest_cache) that the
+    publish and update tools would copy into a public repository: the first
+    dry run of the Daikin 0.1.1 update listed exactly that. Asking git keeps
+    the rule in one place, the file a contributor already reads.
+    """
+    integration = integration.resolve()
+    found: set[Path] = set()
+    for path in integration.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(integration)
+        if any(part in SKIP_PARTS for part in rel.parts):
+            continue
+        found.add(rel)
+    if not found:
+        return found
+    result = subprocess.run(  # noqa: S603
+        ["git", "-C", str(integration), "check-ignore", "--stdin"],
+        input="\n".join(str(p) for p in sorted(found)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # 0: some are ignored, 1: none are. Anything else means git could not
+    # answer (no repository here), and nothing is filtered rather than guessed.
+    if result.returncode not in (0, 1):
+        return found
+    ignored = {Path(line) for line in result.stdout.splitlines() if line}
+    return found - ignored
 
 
 def git(repo: Path, *args: str) -> str:

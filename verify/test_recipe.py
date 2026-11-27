@@ -181,6 +181,9 @@ def check_parity(hair_root: Path) -> tuple[list[str], str, bool]:
         ditto_count = 1
         bypass_protocol = False
         send_count = 3
+        # HAIR 1.2.0's signals carry a radio code here, and the row digest
+        # reads it first. None is an infrared row, as on every wig before.
+        rf = None
 
     class _SigRenamed(_Sig):
         alias = "Power"

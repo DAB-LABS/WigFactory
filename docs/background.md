@@ -31,6 +31,13 @@ as a red X before anybody bumps the pin, rather than mid-publish. That run
 exists because of 0.9.5, which removed `fitting_rows`: nothing went red, the
 gate simply started dying on a traceback.
 
+It works, and that is not enough on its own. On 2026-11-16 HAIR 1.2.0 gave
+every signal an `rf` field for radio codes, and the row digest started
+reading it; the stub signal in `verify/test_recipe.py` had none, so the
+scheduled run went red that Monday and the next. Nobody read it for eleven
+days, because a red X on a schedule notifies nobody. The fix to the stub
+went out with the move of the pin to v1.4.0.
+
 The pin is deliberately ours rather than the Wig Shop's. It has to be at
 least 0.14.2, where HAIR started reporting whether a decoded label accounts
 for its whole capture, because the factory rebuilds codes from labels.

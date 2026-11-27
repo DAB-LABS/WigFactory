@@ -44,12 +44,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _common import (  # noqa: E402
+    COMMIT_IDENTITY,
     DEFAULT_HAIR,
     DEFAULT_SHOP,
     OWNER,
     GitHub,
     Refusal,
     describe,
+    factory_files,
     manifest_of,
     provenance_lines,
     repo_name_for,
@@ -70,16 +72,14 @@ def push_initial_commit(
         return
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / repo
-        shutil.copytree(
-            integration,
-            staging,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"),
-        )
+        for rel in sorted(factory_files(integration)):
+            target = staging / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(integration / rel, target)
         for args in (
             ["init", "-q", "-b", "main"],
             ["add", "-A"],
-            ["-c", "user.name=WigFactory", "-c", "user.email=noreply@localhost",
-             "commit", "-q", "-m", message],
+            [*COMMIT_IDENTITY, "commit", "-q", "-m", message],
             ["remote", "add", "origin", f"https://github.com/{OWNER}/{repo}.git"],
             ["push", "-q", "-u", "origin", "main"],
         ):

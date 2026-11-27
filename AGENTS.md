@@ -181,22 +181,26 @@ warning:
    unmodulated. Until it is established that a generated integration can
    send one that way, the gate refuses rather than ship a code that would go
    out modulated and look like it worked.
-8. **No extra lattices yet.** A `hair-wig/4` matrix carries peer lattices
+8. **No radio codes.** A `hair-wig/5` wig (HAIR 1.2.0) can carry radio rows
+   beside infrared ones. This factory builds infrared integrations, so a
+   radio row refuses by name and the survey files the wig as UNSUPPORTED,
+   not as a defect: the wig is fine, and the factory is what cannot build it.
+9. **No extra lattices yet.** A `hair-wig/4` matrix carries peer lattices
    for presets. Every lattice check here reads the main lattice only, so
    those codes would pass unchecked, and the gate refuses until it checks
    them too.
-9. **No climate cell lands on the wrong state unanswered.** When the live
+10. **No climate cell lands on the wrong state unanswered.** When the live
    comb says a cell sends a state other than the one on its label
    (`field-mismatch`, `duplicated-neighbour`), that refuses unless a
    person's answer to that cell still stands against its current bytes
    (owner ruling 2026-09-23). Command wigs only get a note.
-10. **No row asks for a waveform that cannot exist.** Setting both
+11. **No row asks for a waveform that cannot exist.** Setting both
     `bypass_protocol` and a ditto count is a contradiction: only the encoder
     renders a repeat frame, so a bypassed row asking for one describes
     something nothing can produce.
-11. **The integration reproduces the transmit recipe**, when one is being
+12. **The integration reproduces the transmit recipe**, when one is being
     checked. See stage 5.
-12. **A matrix wig's lattice holds together** (below).
+13. **A matrix wig's lattice holds together** (below).
 
 ### On a matrix wig
 
@@ -232,7 +236,7 @@ gate reads it from HAIR rather than reimplementing it.
 - **The live comb.** The gate combs every wig itself, with the pinned HAIR,
   on every run. A comb receipt stored in a wig is read, reported and
   compared, and never taken as the answer. The live comb reports; its only
-  refusal is requirement 9. Answers count per cell, as HAIR's Detangle
+  refusal is requirement 10. Answers count per cell, as HAIR's Detangle
   counts them, so an answer on one cell never settles its neighbour ([the
   three layers](docs/background.md#the-comb-run-live)).
 - **Repairs and attestations**, counted, carried into the README, and never
