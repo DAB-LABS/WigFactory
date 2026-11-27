@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import importlib.util
 import json
 import logging
 import re
@@ -140,11 +141,20 @@ def requirements(integration: Path) -> list[str]:
     The infrared library at exactly the version this Home Assistant pins in
     its own infrared component, since that is what a user's install runs, and
     whatever the integration's manifest asks for.
-    """
-    import homeassistant.components.infrared as infrared
 
+    The infrared component's manifest is read as a file, never by importing
+    the component: importing it needs the very library this is about to name,
+    which is not installed yet. The first scheduled run imported it, failed
+    every leg before loading anything, and opened six issues saying so.
+    """
+    spec = importlib.util.find_spec("homeassistant")
+    if spec is None or not spec.submodule_search_locations:
+        raise ImportError("homeassistant")
+    package = Path(next(iter(spec.submodule_search_locations)))
     pinned = json.loads(
-        (Path(infrared.__file__).parent / "manifest.json").read_text(encoding="utf-8")
+        (package / "components" / "infrared" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
     )["requirements"]
     (component,) = _component(integration)
     manifest = json.loads((component / "manifest.json").read_text(encoding="utf-8"))
